@@ -22,6 +22,7 @@ import com.sknproj.qrng.ui.theme.QRNGTheme
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import androidx.camera.core.ImageProxy
+import androidx.camera.core.ImageCaptureException
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
