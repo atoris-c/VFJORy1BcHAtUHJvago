@@ -23,12 +23,22 @@ import androidx.core.content.ContextCompat
 import com.sknproj.qrng.ui.theme.QRNGTheme
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import androidx.camera.core.Camera
+import androidx.camera.core.CameraState
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.ImageCaptureException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import androidx.compose.runtime.LaunchedEffect
+import kotlinx.coroutines.flow.collect
+import androidx.lifecycle.asFlow
+import kotlinx.coroutines.flow.collect
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.observe
+
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -39,14 +49,18 @@ class MainActivity : ComponentActivity() {
                 val isCapturing = remember { mutableStateOf(false) }
                 val showLoading = remember { mutableStateOf(false) }
                 val showResultDialog = remember { mutableStateOf(false) }
-                val showErrorDialog = remember { mutableStateOf(false) } // New error state
+                val showErrorDialog = remember { mutableStateOf(false) }
                 val errorMessage = remember { mutableStateOf("") }
                 val randomNumber = remember { mutableStateOf<String?>(null) }
+                val isCameraOpened = remember { mutableStateOf(false) } // New state
+                val cameraState = remember { mutableStateOf<Camera?>(null) } // To store Camera instance
 
                 val context = LocalContext.current
                 val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
                 val previewView = remember { PreviewView(context) }
                 val imageCapture = remember { ImageCapture.Builder().build() }
+                val lifecycleOwner = LocalLifecycleOwner.current
+
 
                 // Set up camera
                 cameraProviderFuture.addListener({
@@ -58,81 +72,96 @@ class MainActivity : ComponentActivity() {
 
                     try {
                         cameraProvider.unbindAll()
-                        cameraProvider.bindToLifecycle(
+                        val camera = cameraProvider.bindToLifecycle(
                             this, cameraSelector, preview, imageCapture
                         )
+                        cameraState.value = camera // Store the Camera instance
+
                     } catch (e: Exception) {
-                        // Handle camera setup error (e.g., log it)
+                        errorMessage.value = "Camera binding failed: ${e.message}"
+                        showErrorDialog.value = true
                     }
                 }, ContextCompat.getMainExecutor(context))
 
+                // Observe camera state
+                DisposableEffect(cameraState.value) {
+                    val camera = cameraState.value
+                    // only if we have a bound Camera
+                    camera?.cameraInfo?.cameraState?.observe(lifecycleOwner) { state ->
+                        isCameraOpened.value = (state.type == CameraState.Type.OPEN)
+                        println("Camera state: ${state.type}")
+                        }
+                    // Clean up when cameraState.value changes or leaves composition
+                    onDispose { /* LiveData.observe is self–removing when lifecycleOwner is destroyed */ }
+                    }
+
                 Column(modifier = Modifier.fillMaxSize()) {
-                    // Camera preview
                     AndroidView(
                         factory = { previewView },
                         modifier = Modifier.weight(1f)
                     )
-                    // Instructions
                     Text("Please cover the camera sensor and press the button to capture.")
-                    // Capture button
                     Button(onClick = {
                         if (!isCapturing.value) {
-                            isCapturing.value = true
-                            showLoading.value = true
-                            imageCapture.takePicture(
-                                ContextCompat.getMainExecutor(context),
-                                object : ImageCapture.OnImageCapturedCallback() {
-                                    override fun onCaptureSuccess(image: ImageProxy) {
-                                        CoroutineScope(Dispatchers.Default).launch {
-                                            val bitmap = image.toBitmap()
-                                            image.close()
-                                            if (bitmap == null) {
-                                                withContext(Dispatchers.Main) {
-                                                    showLoading.value = false
-                                                    isCapturing.value = false
-                                                    errorMessage.value = "Failed to decode image"
-                                                    showErrorDialog.value = true
+                            if (isCameraOpened.value) {
+                                isCapturing.value = true
+                                showLoading.value = true
+                                imageCapture.takePicture(
+                                    ContextCompat.getMainExecutor(context),
+                                    object : ImageCapture.OnImageCapturedCallback() {
+                                        override fun onCaptureSuccess(image: ImageProxy) {
+                                            CoroutineScope(Dispatchers.Default).launch {
+                                                val bitmap = image.toBitmapNullable()
+                                                image.close()
+                                                if (bitmap == null) {
+                                                    withContext(Dispatchers.Main) {
+                                                        showLoading.value = false
+                                                        isCapturing.value = false
+                                                        errorMessage.value = "Failed to decode image"
+                                                        showErrorDialog.value = true
+                                                    }
+                                                    return@launch
                                                 }
-                                                return@launch
-                                            }
-                                            try {
-                                                val number = processImage(bitmap)
-                                                withContext(Dispatchers.Main) {
-                                                    randomNumber.value = number.toString()
-                                                    showResultDialog.value = true
-                                                    showLoading.value = false
-                                                    isCapturing.value = false
-                                                }
-                                            } catch (e: Exception) {
-                                                withContext(Dispatchers.Main) {
-                                                    showLoading.value = false
-                                                    isCapturing.value = false
-                                                    errorMessage.value = "Failed to process image: ${e.message}"
-                                                    showErrorDialog.value = true
+                                                try {
+                                                    val number = processImage(bitmap)
+                                                    withContext(Dispatchers.Main) {
+                                                        randomNumber.value = number.toString()
+                                                        showResultDialog.value = true
+                                                        showLoading.value = false
+                                                        isCapturing.value = false
+                                                    }
+                                                } catch (e: Exception) {
+                                                    withContext(Dispatchers.Main) {
+                                                        showLoading.value = false
+                                                        isCapturing.value = false
+                                                        errorMessage.value = "Failed to process image: ${e.message}"
+                                                        showErrorDialog.value = true
+                                                    }
                                                 }
                                             }
                                         }
-                                    }
 
-                                    override fun onError(exception: ImageCaptureException) {
-                                        CoroutineScope(Dispatchers.Main).launch {
-                                            showLoading.value = false
-                                            isCapturing.value = false
-                                            errorMessage.value = "Image capture failed: ${exception.message}"
-                                            showErrorDialog.value = true
+                                        override fun onError(exception: ImageCaptureException) {
+                                            CoroutineScope(Dispatchers.Main).launch {
+                                                showLoading.value = false
+                                                isCapturing.value = false
+                                                errorMessage.value = "Image capture failed: ${exception.message}"
+                                                showErrorDialog.value = true
+                                            }
                                         }
                                     }
-                                }
-                            )
+                                )
+                            } else {
+                                errorMessage.value = "Camera is not ready. Please try again."
+                                showErrorDialog.value = true
+                            }
                         }
                     }) {
                         Text("Capture")
                     }
-                    // Loading indicator
                     if (showLoading.value) {
                         CircularProgressIndicator()
                     }
-                    // Result dialog
                     if (showResultDialog.value && randomNumber.value != null) {
                         AlertDialog(
                             onDismissRequest = { showResultDialog.value = false },
@@ -145,7 +174,6 @@ class MainActivity : ComponentActivity() {
                             }
                         )
                     }
-                    // Error dialog
                     if (showErrorDialog.value) {
                         AlertDialog(
                             onDismissRequest = { showErrorDialog.value = false },
@@ -165,7 +193,7 @@ class MainActivity : ComponentActivity() {
 }
 
 // Helper functions remain unchanged
-fun ImageProxy.toBitmap(): Bitmap? {
+fun ImageProxy.toBitmapNullable(): Bitmap? {
     val buffer = planes[0].buffer
     buffer.rewind()
     val bytes = ByteArray(buffer.remaining()) // Use remaining() instead of capacity()
