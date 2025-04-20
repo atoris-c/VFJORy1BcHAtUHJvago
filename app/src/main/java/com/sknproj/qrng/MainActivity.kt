@@ -100,6 +100,7 @@ fun ImageProxy.toBitmap(): Bitmap {
     buffer.get(bytes)
     return BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
 }
+
 fun processImage(bitmap: Bitmap): Int {
     val width = bitmap.width
     val height = bitmap.height
@@ -108,12 +109,17 @@ fun processImage(bitmap: Bitmap): Int {
 
     val randomBits = StringBuilder()
     for (pixel in pixels) {
-        val blue = pixel and 0xFF // Get blue channel
-        val lsb = blue and 1 // Least significant bit
-        randomBits.append(lsb)
-        if (randomBits.length >= 32) break // Collect 32 bits
+        val red = (pixel shr 16) and 0xFF   // Extract red channel
+        val green = (pixel shr 8) and 0xFF  // Extract green channel
+        val blue = pixel and 0xFF           // Extract blue channel
+        val lsbRed = red and 1              // LSB of red
+        val lsbGreen = green and 1          // LSB of green
+        val lsbBlue = blue and 1            // LSB of blue
+        val randomBit = lsbRed xor lsbGreen xor lsbBlue  // Combine with XOR
+        randomBits.append(randomBit)
+        if (randomBits.length >= 32) break  // Stop once you have 32 bits
     }
-    return randomBits.toString().toInt(2) // Convert binary string to integer
+    return randomBits.toString().toInt(2)  // Convert binary string to integer
 }
 
 /*@Composable
