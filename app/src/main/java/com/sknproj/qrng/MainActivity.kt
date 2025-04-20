@@ -115,7 +115,7 @@ fun processImage(bitmap: Bitmap): Int {
     return randomBits.toString().toInt(2) // Convert binary string to integer
 }
 
-@Composable
+/*@Composable
 fun Greeting(name: String, modifier: Modifier = Modifier) {
     Text(
         text = "Hello $name!",
@@ -129,4 +129,4 @@ fun GreetingPreview() {
     QRNGTheme {
         Greeting("Android")
     }
-}
+}*/
