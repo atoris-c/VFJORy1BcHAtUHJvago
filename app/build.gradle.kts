@@ -68,5 +68,6 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
     implementation("androidx.lifecycle:lifecycle-livedata-ktx:2.8.7")
+    implementation("com.google.accompanist:accompanist-systemuicontroller:0.27.0")
 
 }
