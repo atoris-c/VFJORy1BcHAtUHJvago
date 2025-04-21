@@ -1,5 +1,6 @@
 package com.sknproj.qrng
 
+import android.content.pm.PackageManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -38,6 +39,9 @@ import kotlinx.coroutines.flow.collect
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.lifecycle.observe
+import android.Manifest
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 
 
 class MainActivity : ComponentActivity() {
@@ -54,6 +58,9 @@ class MainActivity : ComponentActivity() {
                 val randomNumber = remember { mutableStateOf<String?>(null) }
                 val isCameraOpened = remember { mutableStateOf(false) } // New state
                 val cameraState = remember { mutableStateOf<Camera?>(null) } // To store Camera instance
+                val showPermissionDialog = remember { mutableStateOf(true) } // State for permission dialog
+                val hasCameraPermission = remember { mutableStateOf(ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) } // State for permission status
+
 
                 val context = LocalContext.current
                 val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
@@ -61,104 +68,180 @@ class MainActivity : ComponentActivity() {
                 val imageCapture = remember { ImageCapture.Builder().build() }
                 val lifecycleOwner = LocalLifecycleOwner.current
 
+                // Permission request launcher
+                val permissionLauncher = rememberLauncherForActivityResult(
+                    contract = ActivityResultContracts.RequestPermission()
+                ) { isGranted: Boolean ->
+                    hasCameraPermission.value = isGranted
+                    if (isGranted) {
+                        // If permission is granted after request, proceed with camera setup
+                        cameraProviderFuture.addListener({
+                            val cameraProvider = cameraProviderFuture.get()
+                            val preview = Preview.Builder().build().also {
+                                it.setSurfaceProvider(previewView.surfaceProvider)
+                            }
+                            val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
 
-                // Set up camera
-                cameraProviderFuture.addListener({
-                    val cameraProvider = cameraProviderFuture.get()
-                    val preview = Preview.Builder().build().also {
-                        it.setSurfaceProvider(previewView.surfaceProvider)
-                    }
-                    val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
+                            try {
+                                cameraProvider.unbindAll()
+                                val camera = cameraProvider.bindToLifecycle(
+                                    this@MainActivity, cameraSelector, preview, imageCapture
+                                )
+                                cameraState.value = camera // Store the Camera instance
 
-                    try {
-                        cameraProvider.unbindAll()
-                        val camera = cameraProvider.bindToLifecycle(
-                            this, cameraSelector, preview, imageCapture
-                        )
-                        cameraState.value = camera // Store the Camera instance
-
-                    } catch (e: Exception) {
-                        errorMessage.value = "Camera binding failed: ${e.message}"
+                            } catch (e: Exception) {
+                                errorMessage.value = "Camera binding failed: ${e.message}"
+                                showErrorDialog.value = true
+                            }
+                        }, ContextCompat.getMainExecutor(context))
+                    } else {
+                        errorMessage.value = "Camera permission is required to use this feature."
                         showErrorDialog.value = true
                     }
-                }, ContextCompat.getMainExecutor(context))
+                }
+
+                // Check permission and show dialog on launch
+                LaunchedEffect(Unit) {
+                    if (!hasCameraPermission.value) {
+                        showPermissionDialog.value = true
+                    } else {
+                        showPermissionDialog.value = false // Hide dialog if permission already granted
+                        // Proceed with camera setup if permission is already granted
+                        cameraProviderFuture.addListener({
+                            val cameraProvider = cameraProviderFuture.get()
+                            val preview = Preview.Builder().build().also {
+                                it.setSurfaceProvider(previewView.surfaceProvider)
+                            }
+                            val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
+
+                            try {
+                                cameraProvider.unbindAll()
+                                val camera = cameraProvider.bindToLifecycle(
+                                    this@MainActivity, cameraSelector, preview, imageCapture
+                                )
+                                cameraState.value = camera // Store the Camera instance
+
+                            } catch (e: Exception) {
+                                errorMessage.value = "Camera binding failed: ${e.message}"
+                                showErrorDialog.value = true
+                            }
+                        }, ContextCompat.getMainExecutor(context))
+                    }
+                }
+
+
+                // Set up camera (only if permission is granted and dialog is hidden)
+                // This block is now primarily for initial setup if permission is already granted
+                // The LaunchedEffect handles the case where permission is granted after the dialog/request
+                if (hasCameraPermission.value && !showPermissionDialog.value && cameraState.value == null) {
+                    cameraProviderFuture.addListener({
+                        val cameraProvider = cameraProviderFuture.get()
+                        val preview = Preview.Builder().build().also {
+                            it.setSurfaceProvider(previewView.surfaceProvider)
+                        }
+                        val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
+
+                        try {
+                            cameraProvider.unbindAll()
+                            val camera = cameraProvider.bindToLifecycle(
+                                this@MainActivity, cameraSelector, preview, imageCapture
+                            )
+                            cameraState.value = camera // Store the Camera instance
+
+                        } catch (e: Exception) {
+                            errorMessage.value = "Camera binding failed: ${e.message}"
+                            showErrorDialog.value = true
+                        }
+                    }, ContextCompat.getMainExecutor(context))
+                }
+
 
                 // Observe camera state
                 DisposableEffect(cameraState.value) {
                     val camera = cameraState.value
                     // only if we have a bound Camera
                     camera?.cameraInfo?.cameraState?.observe(lifecycleOwner) { state ->
-                        isCameraOpened.value = (state.type == CameraState.Type.OPEN)
-                        println("Camera state: ${state.type}")
+                        isCameraOpened.value = (state.type == CameraState.Type.OPEN && state.error == null)
+                        if (state.error != null) {
+                            println("Camera error: ${state.error}")
+                            // Optionally, show a message like "Camera error, please try again"
                         }
-                    // Clean up when cameraState.value changes or leaves composition
-                    onDispose { /* LiveData.observe is self–removing when lifecycleOwner is destroyed */ }
                     }
+                    // Clean up when cameraState.value changes or leaves composition
+                    onDispose { /* LiveData.observe is self-removing when lifecycleOwner is destroyed */ }
+                }
 
                 Column(modifier = Modifier.fillMaxSize()) {
-                    AndroidView(
-                        factory = { previewView },
-                        modifier = Modifier.weight(1f)
-                    )
-                    Text("Please cover the camera sensor and press the button to capture.")
-                    Button(onClick = {
-                        if (!isCapturing.value) {
-                            if (isCameraOpened.value) {
-                                isCapturing.value = true
-                                showLoading.value = true
-                                imageCapture.takePicture(
-                                    ContextCompat.getMainExecutor(context),
-                                    object : ImageCapture.OnImageCapturedCallback() {
-                                        override fun onCaptureSuccess(image: ImageProxy) {
-                                            CoroutineScope(Dispatchers.Default).launch {
-                                                val bitmap = image.toBitmapNullable()
-                                                image.close()
-                                                if (bitmap == null) {
-                                                    withContext(Dispatchers.Main) {
-                                                        showLoading.value = false
-                                                        isCapturing.value = false
-                                                        errorMessage.value = "Failed to decode image"
-                                                        showErrorDialog.value = true
+                    if (hasCameraPermission.value) { // Only show preview if permission is granted
+                        AndroidView(
+                            factory = { previewView },
+                            modifier = Modifier.weight(1f)
+                        )
+                        Text("Please cover the camera sensor and press the button to capture.")
+                        Button(onClick = {
+                            if (!isCapturing.value) {
+                                if (isCameraOpened.value) {
+                                    isCapturing.value = true
+                                    showLoading.value = true
+                                    imageCapture.takePicture(
+                                        ContextCompat.getMainExecutor(context),
+                                        object : ImageCapture.OnImageCapturedCallback() {
+                                            override fun onCaptureSuccess(image: ImageProxy) {
+                                                CoroutineScope(Dispatchers.Default).launch {
+                                                    val bitmap = image.toBitmapNullable()
+                                                    image.close()
+                                                    if (bitmap == null) {
+                                                        withContext(Dispatchers.Main) {
+                                                            showLoading.value = false
+                                                            isCapturing.value = false
+                                                            errorMessage.value = "Failed to decode image"
+                                                            showErrorDialog.value = true
+                                                        }
+                                                        return@launch
                                                     }
-                                                    return@launch
-                                                }
-                                                try {
-                                                    val number = processImage(bitmap)
-                                                    withContext(Dispatchers.Main) {
-                                                        randomNumber.value = number.toString()
-                                                        showResultDialog.value = true
-                                                        showLoading.value = false
-                                                        isCapturing.value = false
-                                                    }
-                                                } catch (e: Exception) {
-                                                    withContext(Dispatchers.Main) {
-                                                        showLoading.value = false
-                                                        isCapturing.value = false
-                                                        errorMessage.value = "Failed to process image: ${e.message}"
-                                                        showErrorDialog.value = true
+                                                    try {
+                                                        val number = processImage(bitmap)
+                                                        withContext(Dispatchers.Main) {
+                                                            randomNumber.value = number.toString()
+                                                            showResultDialog.value = true
+                                                            showLoading.value = false
+                                                            isCapturing.value = false
+                                                        }
+                                                    } catch (e: Exception) {
+                                                        withContext(Dispatchers.Main) {
+                                                            showLoading.value = false
+                                                            isCapturing.value = false
+                                                            errorMessage.value = "Failed to process image: ${e.message}"
+                                                            showErrorDialog.value = true
+                                                        }
                                                     }
                                                 }
                                             }
-                                        }
 
-                                        override fun onError(exception: ImageCaptureException) {
-                                            CoroutineScope(Dispatchers.Main).launch {
-                                                showLoading.value = false
-                                                isCapturing.value = false
-                                                errorMessage.value = "Image capture failed: ${exception.message}"
-                                                showErrorDialog.value = true
+                                            override fun onError(exception: ImageCaptureException) {
+                                                CoroutineScope(Dispatchers.Main).launch {
+                                                    showLoading.value = false
+                                                    isCapturing.value = false
+                                                    errorMessage.value = "Image capture failed: ${exception.message}"
+                                                    showErrorDialog.value = true
+                                                }
                                             }
                                         }
-                                    }
-                                )
-                            } else {
-                                errorMessage.value = "Camera is not ready. Please try again."
-                                showErrorDialog.value = true
+                                    )
+                                } else {
+                                    errorMessage.value = "Camera is not ready. Please try again."
+                                    showErrorDialog.value = true
+                                }
                             }
+                        }) {
+                            Text("Capture")
                         }
-                    }) {
-                        Text("Capture")
+                    } else {
+                        // Show a message if permission is not granted
+                        Text("Camera permission is required to use the QRNG feature.")
                     }
+
+
                     if (showLoading.value) {
                         CircularProgressIndicator()
                     }
@@ -181,6 +264,38 @@ class MainActivity : ComponentActivity() {
                             text = { Text(errorMessage.value) },
                             confirmButton = {
                                 Button(onClick = { showErrorDialog.value = false }) {
+                                    Text("OK")
+                                }
+                            }
+                        )
+                    }
+
+                    // Permission Status Dialog
+                    if (showPermissionDialog.value) {
+                        AlertDialog(
+                            onDismissRequest = {
+                                showPermissionDialog.value = false
+                                if (!hasCameraPermission.value) {
+                                    // Request permission when dialog is dismissed if not granted
+                                    permissionLauncher.launch(Manifest.permission.CAMERA)
+                                }
+                            },
+                            title = { Text("Camera Permission") },
+                            text = {
+                                if (hasCameraPermission.value) {
+                                    Text("Camera permission has been granted.")
+                                } else {
+                                    Text("Camera permission is required to use this feature. Please grant the permission.")
+                                }
+                            },
+                            confirmButton = {
+                                Button(onClick = {
+                                    showPermissionDialog.value = false
+                                    if (!hasCameraPermission.value) {
+                                        // Request permission when OK is clicked if not granted
+                                        permissionLauncher.launch(Manifest.permission.CAMERA)
+                                    }
+                                }) {
                                     Text("OK")
                                 }
                             }
@@ -245,19 +360,3 @@ fun processImage(bitmap: Bitmap): Int {
     val selectedBits = whitenedBits.substring(0, 32)
     return selectedBits.toInt(2)
 }
-
-/*@Composable
-fun Greeting(name: String, modifier: Modifier = Modifier) {
-    Text(
-        text = "Hello $name!",
-        modifier = modifier
-    )
-}
-
-@Preview(showBackground = true)
-@Composable
-fun GreetingPreview() {
-    QRNGTheme {
-        Greeting("Android")
-    }
-}*/
