@@ -362,8 +362,8 @@ fun processImage(bitmap: Bitmap): Int {
         // For simplicity, pad with zeros or retry; in practice, gather more bits
         throw IllegalStateException("Only ${whitenedBits.length} bits after whitening, need 32")
         // Alternative: while (whitenedBits.length < 32) whitenedBits += "0"
+    } else {
+        val selectedBits = whitenedBits.substring(0, 32)
+        return selectedBits.toUInt(2).toInt()
     }
-
-    val selectedBits = whitenedBits.substring(0, 32)
-    return selectedBits.toInt(2)
 }
