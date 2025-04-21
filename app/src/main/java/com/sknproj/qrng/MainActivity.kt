@@ -27,36 +27,63 @@ import androidx.camera.core.Camera
 import androidx.camera.core.CameraState
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.ImageCaptureException
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import androidx.compose.runtime.LaunchedEffect
-import kotlinx.coroutines.flow.collect
-import androidx.lifecycle.asFlow
-import kotlinx.coroutines.flow.collect
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.platform.LocalLifecycleOwner
-import androidx.lifecycle.observe
 import android.Manifest
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxHeight // Import for fillMaxHeight
 import androidx.compose.ui.unit.dp // Import for dp
-import androidx.compose.foundation.layout.padding // Import for padding
 import androidx.compose.ui.Alignment // Import for Alignment
 import androidx.compose.foundation.layout.Spacer // Import for Spacer
 import androidx.compose.foundation.layout.height // Import for height
 import androidx.compose.foundation.layout.Arrangement // Import for Arrangement
 import androidx.compose.foundation.shape.RoundedCornerShape // Import for RoundedCornerShape
 import androidx.compose.ui.draw.clip // Import for clip
+import androidx.compose.material3.MaterialTheme // Import MaterialTheme for colors
+import androidx.compose.foundation.background // Import background modifier
+import androidx.compose.foundation.layout.Row // Import Row for header layout
+import androidx.compose.foundation.layout.fillMaxWidth // Import fillMaxWidth
+import androidx.compose.ui.text.font.FontWeight // Import FontWeight
+import androidx.compose.ui.graphics.Color // Import Color
+import androidx.compose.runtime.SideEffect // Import SideEffect
+import androidx.core.view.WindowCompat // Import WindowCompat
+import androidx.compose.foundation.layout.WindowInsets // Import WindowInsets
+import androidx.compose.foundation.layout.statusBars // Import statusBars
+import androidx.compose.foundation.layout.windowInsetsPadding // Import windowInsetsPadding
+import androidx.compose.runtime.Composable // Import Composable
+import androidx.compose.foundation.layout.padding
+import com.google.accompanist.systemuicontroller.rememberSystemUiController
 
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Enable drawing behind the system bars
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+
         setContent {
             QRNGTheme {
+                // Get the primary color from the theme for the header and status bar
+                val headerColor = MaterialTheme.colorScheme.primary
+                val onPrimaryColor = MaterialTheme.colorScheme.onPrimary // Color for text/icons on the primary color
+
+                // Set status bar color
+                val systemUiController = rememberSystemUiController()
+                SideEffect {
+                    systemUiController.setStatusBarColor(
+                        color = headerColor,
+                        darkIcons = onPrimaryColor != Color.Black // Set dark icons if header color is light
+                    )
+                    // You might also want to set the navigation bar color
+                    // systemUiController.setNavigationBarColor(
+                    //     color = MaterialTheme.colorScheme.background // Example: match background color
+                    // )
+                }
+
+
                 // State variables
                 val isCapturing = remember { mutableStateOf(false) }
                 val showLoading = remember { mutableStateOf(false) }
@@ -184,100 +211,133 @@ class MainActivity : ComponentActivity() {
                     onDispose { /* LiveData.observe is self-removing when lifecycleOwner is destroyed */ }
                 }
 
-                // Main UI Layout
+                // Overall layout container
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(16.dp), // Added padding around the entire column
-                    horizontalAlignment = Alignment.CenterHorizontally, // Center items horizontally
-                    verticalArrangement = Arrangement.spacedBy(16.dp) // Add space between items
+                        .windowInsetsPadding(WindowInsets.statusBars) // Now on the Root
+                        .background(Color.White) // Add background here
                 ) {
-                    if (hasCameraPermission.value) { // Only show preview if permission is granted
-                        AndroidView(
-                            factory = { previewView },
-                            modifier = Modifier
-                                .fillMaxHeight(0.6f) // Reduced camera preview height to 60% of available space
-                                .fillMaxSize() // Ensure it fills the width within the limited height
-                                .clip(RoundedCornerShape(16.dp)) // Added rounded corners to the camera preview
-                        )
-                        // Instruction text with padding
-                        Text(
-                            "Please cover the camera sensor and press the button to capture.",
-                            modifier = Modifier.padding(horizontal = 8.dp) // Added horizontal padding to text
-                        )
-                        // Button with enabled state controlled by isCapturing
-                        Button(
-                            onClick = {
-                                if (!isCapturing.value) {
-                                    if (isCameraOpened.value) {
-                                        isCapturing.value = true
-                                        showLoading.value = true
-                                        imageCapture.takePicture(
-                                            ContextCompat.getMainExecutor(context),
-                                            object : ImageCapture.OnImageCapturedCallback() {
-                                                override fun onCaptureSuccess(image: ImageProxy) {
-                                                    CoroutineScope(Dispatchers.Default).launch {
-                                                        val bitmap = image.toBitmapNullable()
-                                                        image.close()
-                                                        if (bitmap == null) {
-                                                            withContext(Dispatchers.Main) {
-                                                                showLoading.value = false
-                                                                isCapturing.value = false
-                                                                errorMessage.value = "Failed to decode image"
-                                                                showErrorDialog.value = true
-                                                            }
-                                                            return@launch
-                                                        }
-                                                        try {
-                                                            val number = processImage(bitmap)
-                                                            withContext(Dispatchers.Main) {
-                                                                randomNumber.value = number.toString()
-                                                                showResultDialog.value = true
-                                                                showLoading.value = false
-                                                                isCapturing.value = false
-                                                            }
-                                                        } catch (e: Exception) {
-                                                            withContext(Dispatchers.Main) {
-                                                                showLoading.value = false
-                                                                isCapturing.value = false
-                                                                errorMessage.value = "Failed to process image: ${e.message}"
-                                                                showErrorDialog.value = true
-                                                            }
-                                                        }
-                                                    }
-                                                }
 
-                                                override fun onError(exception: ImageCaptureException) {
-                                                    CoroutineScope(Dispatchers.Main).launch {
-                                                        showLoading.value = false
-                                                        isCapturing.value = false
+                    // App Header
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth() // This makes the Row go edge-to-edge
+                            .height(56.dp) // Standard AppBar height
+                            .background(
+                                color = headerColor, // Use primary color for background
+                                shape = RoundedCornerShape(bottomStart = 16.dp, bottomEnd = 16.dp) // Rounded bottom corners
+                            )
+                            .padding(top = 8.dp), // Add a bit of extra top padding to the header
+
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "QRNG v0.1",
+                            color = onPrimaryColor,
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier
+                                .padding(horizontal = 16.dp) // Padding ONLY on the text
+                        )
+                    }
+
+                    //Main UI content.
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(top = 16.dp) // Add top padding for .content spacing
+                            .padding(horizontal = 16.dp), // Add horizontal padding to content
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        if (hasCameraPermission.value) { // Only show preview if permission is granted
+                            AndroidView(
+                                factory = { previewView },
+                                modifier = Modifier
+                                    .fillMaxHeight(0.6f) // Reduced camera preview height to 60% of available space
+                                    .fillMaxWidth() // Ensure it fills the width within the limited height
+                                    .clip(RoundedCornerShape(16.dp)) // Added rounded corners to the camera preview
+                            )
+                            // Instruction text with padding
+                            Text(
+                                "Please cover the camera sensor and press the button to capture.",
+                                modifier = Modifier.padding(horizontal = 8.dp) // Added horizontal padding to text
+                            )
+                            // Button with enabled state controlled by isCapturing
+                            Button(
+                                onClick = {
+                                    if (!isCapturing.value) {
+                                        if (isCameraOpened.value) {
+                                            isCapturing.value = true
+                                            showLoading.value = true
+                                            imageCapture.takePicture(
+                                                ContextCompat.getMainExecutor(context),
+                                                object : ImageCapture.OnImageCapturedCallback() {
+                                                    override fun onCaptureSuccess(image: ImageProxy) {
+                                                        try {
+                                                            println("Image captured")
+                                                            val bitmap = image.toBitmapNullable()
+                                                            image.close()
+                                                            if (bitmap != null) {
+                                                                try {
+                                                                    val number = processImage(bitmap)
+                                                                    println("Number: $number")
+                                                                    randomNumber.value = number.toString()
+                                                                    showResultDialog.value = true
+                                                                    showLoading.value = false
+                                                                } catch (e: IllegalStateException) {
+                                                                    println("Error: ${e.message}")
+                                                                    errorMessage.value = e.message ?: "An error occurred during processing."
+                                                                    showErrorDialog.value = true
+                                                                    showLoading.value = false
+                                                                }
+                                                            } else {
+                                                                println("Error: Bitmap is null")
+                                                                errorMessage.value = "Bitmap is null"
+                                                                showErrorDialog.value = true
+                                                                showLoading.value = false
+                                                            }
+                                                        } catch (e: Exception){
+                                                            println("Error: ${e.message}")
+                                                            errorMessage.value = e.message ?: "An error occurred during processing."
+                                                            showErrorDialog.value = true
+                                                            showLoading.value = false
+                                                        } finally {
+                                                            isCapturing.value = false
+                                                        }
+
+                                                    }
+
+                                                    override fun onError(exception: ImageCaptureException) {
+                                                        println("Image capture error: ${exception.message}")
                                                         errorMessage.value = "Image capture failed: ${exception.message}"
                                                         showErrorDialog.value = true
+                                                        showLoading.value = false
+                                                        isCapturing.value = false
                                                     }
                                                 }
-                                            }
-                                        )
-                                    } else {
-                                        errorMessage.value = "Camera is not ready. Please try again."
-                                        showErrorDialog.value = true
+                                            )
+                                        }
                                     }
-                                }
-                            },
-                            enabled = !isCapturing.value // Disable button while capturing
-                        ) {
-                            Text("Capture")
+                                },
+                                enabled = !isCapturing.value
+                            ) {
+                                Text("Capture")
+                            }
+                        } else {
+                            // Show a message if permission is not granted
+                            Text("Camera permission is required to use the QRNG feature.")
                         }
-                    } else {
-                        // Show a message if permission is not granted
-                        Text("Camera permission is required to use the QRNG feature.")
-                    }
 
-                    // Loading indicator (positioned within the Column, will be centered horizontally)
-                    if (showLoading.value) {
-                        CircularProgressIndicator()
-                    }
+                        // Loading indicator (positioned within the Column, will be centered horizontally)
+                        if (showLoading.value) {
+                            CircularProgressIndicator()
+                        }
+                    } // End of Main UI Content Column
 
-                    // Dialogs remain the same
+                    // Dialogs remain the same (they are drawn on top of the UI)
                     if (showResultDialog.value && randomNumber.value != null) {
                         AlertDialog(
                             onDismissRequest = { showResultDialog.value = false },
@@ -336,7 +396,7 @@ class MainActivity : ComponentActivity() {
                             }
                         )
                     }
-                }
+                } // End of Overall layout container
             }
         }
     }
@@ -394,4 +454,9 @@ fun processImage(bitmap: Bitmap): Int {
         val selectedBits = whitenedBits.substring(0, 32)
         return selectedBits.toUInt(2).toInt()
     }
+}
+
+@Composable
+fun rememberSystemUiController(): com.google.accompanist.systemuicontroller.SystemUiController {
+    return com.google.accompanist.systemuicontroller.rememberSystemUiController()
 }
