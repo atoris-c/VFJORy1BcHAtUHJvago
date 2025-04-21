@@ -1,5 +1,4 @@
 package com.sknproj.qrng
-
 import android.content.pm.PackageManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -42,6 +41,15 @@ import androidx.lifecycle.observe
 import android.Manifest
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.fillMaxHeight // Import for fillMaxHeight
+import androidx.compose.ui.unit.dp // Import for dp
+import androidx.compose.foundation.layout.padding // Import for padding
+import androidx.compose.ui.Alignment // Import for Alignment
+import androidx.compose.foundation.layout.Spacer // Import for Spacer
+import androidx.compose.foundation.layout.height // Import for height
+import androidx.compose.foundation.layout.Arrangement // Import for Arrangement
+import androidx.compose.foundation.shape.RoundedCornerShape // Import for RoundedCornerShape
+import androidx.compose.ui.draw.clip // Import for clip
 
 
 class MainActivity : ComponentActivity() {
@@ -176,69 +184,87 @@ class MainActivity : ComponentActivity() {
                     onDispose { /* LiveData.observe is self-removing when lifecycleOwner is destroyed */ }
                 }
 
-                Column(modifier = Modifier.fillMaxSize()) {
+                // Main UI Layout
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(16.dp), // Added padding around the entire column
+                    horizontalAlignment = Alignment.CenterHorizontally, // Center items horizontally
+                    verticalArrangement = Arrangement.spacedBy(16.dp) // Add space between items
+                ) {
                     if (hasCameraPermission.value) { // Only show preview if permission is granted
                         AndroidView(
                             factory = { previewView },
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier
+                                .fillMaxHeight(0.6f) // Reduced camera preview height to 60% of available space
+                                .fillMaxSize() // Ensure it fills the width within the limited height
+                                .clip(RoundedCornerShape(16.dp)) // Added rounded corners to the camera preview
                         )
-                        Text("Please cover the camera sensor and press the button to capture.")
-                        Button(onClick = {
-                            if (!isCapturing.value) {
-                                if (isCameraOpened.value) {
-                                    isCapturing.value = true
-                                    showLoading.value = true
-                                    imageCapture.takePicture(
-                                        ContextCompat.getMainExecutor(context),
-                                        object : ImageCapture.OnImageCapturedCallback() {
-                                            override fun onCaptureSuccess(image: ImageProxy) {
-                                                CoroutineScope(Dispatchers.Default).launch {
-                                                    val bitmap = image.toBitmapNullable()
-                                                    image.close()
-                                                    if (bitmap == null) {
-                                                        withContext(Dispatchers.Main) {
-                                                            showLoading.value = false
-                                                            isCapturing.value = false
-                                                            errorMessage.value = "Failed to decode image"
-                                                            showErrorDialog.value = true
+                        // Instruction text with padding
+                        Text(
+                            "Please cover the camera sensor and press the button to capture.",
+                            modifier = Modifier.padding(horizontal = 8.dp) // Added horizontal padding to text
+                        )
+                        // Button with enabled state controlled by isCapturing
+                        Button(
+                            onClick = {
+                                if (!isCapturing.value) {
+                                    if (isCameraOpened.value) {
+                                        isCapturing.value = true
+                                        showLoading.value = true
+                                        imageCapture.takePicture(
+                                            ContextCompat.getMainExecutor(context),
+                                            object : ImageCapture.OnImageCapturedCallback() {
+                                                override fun onCaptureSuccess(image: ImageProxy) {
+                                                    CoroutineScope(Dispatchers.Default).launch {
+                                                        val bitmap = image.toBitmapNullable()
+                                                        image.close()
+                                                        if (bitmap == null) {
+                                                            withContext(Dispatchers.Main) {
+                                                                showLoading.value = false
+                                                                isCapturing.value = false
+                                                                errorMessage.value = "Failed to decode image"
+                                                                showErrorDialog.value = true
+                                                            }
+                                                            return@launch
                                                         }
-                                                        return@launch
-                                                    }
-                                                    try {
-                                                        val number = processImage(bitmap)
-                                                        withContext(Dispatchers.Main) {
-                                                            randomNumber.value = number.toString()
-                                                            showResultDialog.value = true
-                                                            showLoading.value = false
-                                                            isCapturing.value = false
-                                                        }
-                                                    } catch (e: Exception) {
-                                                        withContext(Dispatchers.Main) {
-                                                            showLoading.value = false
-                                                            isCapturing.value = false
-                                                            errorMessage.value = "Failed to process image: ${e.message}"
-                                                            showErrorDialog.value = true
+                                                        try {
+                                                            val number = processImage(bitmap)
+                                                            withContext(Dispatchers.Main) {
+                                                                randomNumber.value = number.toString()
+                                                                showResultDialog.value = true
+                                                                showLoading.value = false
+                                                                isCapturing.value = false
+                                                            }
+                                                        } catch (e: Exception) {
+                                                            withContext(Dispatchers.Main) {
+                                                                showLoading.value = false
+                                                                isCapturing.value = false
+                                                                errorMessage.value = "Failed to process image: ${e.message}"
+                                                                showErrorDialog.value = true
+                                                            }
                                                         }
                                                     }
                                                 }
-                                            }
 
-                                            override fun onError(exception: ImageCaptureException) {
-                                                CoroutineScope(Dispatchers.Main).launch {
-                                                    showLoading.value = false
-                                                    isCapturing.value = false
-                                                    errorMessage.value = "Image capture failed: ${exception.message}"
-                                                    showErrorDialog.value = true
+                                                override fun onError(exception: ImageCaptureException) {
+                                                    CoroutineScope(Dispatchers.Main).launch {
+                                                        showLoading.value = false
+                                                        isCapturing.value = false
+                                                        errorMessage.value = "Image capture failed: ${exception.message}"
+                                                        showErrorDialog.value = true
+                                                    }
                                                 }
                                             }
-                                        }
-                                    )
-                                } else {
-                                    errorMessage.value = "Camera is not ready. Please try again."
-                                    showErrorDialog.value = true
+                                        )
+                                    } else {
+                                        errorMessage.value = "Camera is not ready. Please try again."
+                                        showErrorDialog.value = true
+                                    }
                                 }
-                            }
-                        }) {
+                            },
+                            enabled = !isCapturing.value // Disable button while capturing
+                        ) {
                             Text("Capture")
                         }
                     } else {
@@ -246,10 +272,12 @@ class MainActivity : ComponentActivity() {
                         Text("Camera permission is required to use the QRNG feature.")
                     }
 
-
+                    // Loading indicator (positioned within the Column, will be centered horizontally)
                     if (showLoading.value) {
                         CircularProgressIndicator()
                     }
+
+                    // Dialogs remain the same
                     if (showResultDialog.value && randomNumber.value != null) {
                         AlertDialog(
                             onDismissRequest = { showResultDialog.value = false },
