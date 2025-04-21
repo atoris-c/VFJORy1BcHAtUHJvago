@@ -58,8 +58,10 @@ class MainActivity : ComponentActivity() {
                 val randomNumber = remember { mutableStateOf<String?>(null) }
                 val isCameraOpened = remember { mutableStateOf(false) } // New state
                 val cameraState = remember { mutableStateOf<Camera?>(null) } // To store Camera instance
-                val showPermissionDialog = remember { mutableStateOf(true) } // State for permission dialog
-                val hasCameraPermission = remember { mutableStateOf(ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) } // State for permission status
+                // showPermissionDialog is now initially true to always show it on startup
+                val showPermissionDialog = remember { mutableStateOf(true) }
+                // hasCameraPermission checks the status on startup
+                val hasCameraPermission = remember { mutableStateOf(ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) }
 
 
                 val context = LocalContext.current
@@ -72,7 +74,7 @@ class MainActivity : ComponentActivity() {
                 val permissionLauncher = rememberLauncherForActivityResult(
                     contract = ActivityResultContracts.RequestPermission()
                 ) { isGranted: Boolean ->
-                    hasCameraPermission.value = isGranted
+                    hasCameraPermission.value = isGranted // Update permission status
                     if (isGranted) {
                         // If permission is granted after request, proceed with camera setup
                         cameraProviderFuture.addListener({
@@ -95,17 +97,18 @@ class MainActivity : ComponentActivity() {
                             }
                         }, ContextCompat.getMainExecutor(context))
                     } else {
+                        // If permission is denied after request
                         errorMessage.value = "Camera permission is required to use this feature."
                         showErrorDialog.value = true
                     }
                 }
 
-                // Check permission and show dialog on launch
+                // Always show the permission dialog on launch
                 LaunchedEffect(Unit) {
-                    if (!hasCameraPermission.value) {
-                        showPermissionDialog.value = true
-                    } else {
-                        showPermissionDialog.value = false // Hide dialog if permission already granted
+                    // The dialog is already initialized to true, so we just need to ensure
+                    // the camera setup happens if permission is already granted.
+                    // The dialog itself will display the status.
+                    if (hasCameraPermission.value) {
                         // Proceed with camera setup if permission is already granted
                         cameraProviderFuture.addListener({
                             val cameraProvider = cameraProviderFuture.get()
@@ -127,13 +130,15 @@ class MainActivity : ComponentActivity() {
                             }
                         }, ContextCompat.getMainExecutor(context))
                     }
+                    // showPermissionDialog is already true, so the dialog will be shown.
                 }
 
 
                 // Set up camera (only if permission is granted and dialog is hidden)
                 // This block is now primarily for initial setup if permission is already granted
                 // The LaunchedEffect handles the case where permission is granted after the dialog/request
-                if (hasCameraPermission.value && !showPermissionDialog.value && cameraState.value == null) {
+                // We keep this check here as a fallback/alternative trigger for camera setup
+                if (hasCameraPermission.value && cameraState.value == null) {
                     cameraProviderFuture.addListener({
                         val cameraProvider = cameraProviderFuture.get()
                         val preview = Preview.Builder().build().also {
@@ -270,32 +275,34 @@ class MainActivity : ComponentActivity() {
                         )
                     }
 
-                    // Permission Status Dialog
+                    // Permission Status Dialog - Always displayed on startup
                     if (showPermissionDialog.value) {
                         AlertDialog(
                             onDismissRequest = {
                                 showPermissionDialog.value = false
+                                // Only request permission if it's not already granted
                                 if (!hasCameraPermission.value) {
-                                    // Request permission when dialog is dismissed if not granted
                                     permissionLauncher.launch(Manifest.permission.CAMERA)
                                 }
                             },
-                            title = { Text("Camera Permission") },
+                            title = { Text("Camera Permission Status") }, // Updated title
                             text = {
+                                // Display the current status
                                 if (hasCameraPermission.value) {
-                                    Text("Camera permission has been granted.")
+                                    Text("Camera permission has been granted. You can now use the QRNG feature.")
                                 } else {
-                                    Text("Camera permission is required to use this feature. Please grant the permission.")
+                                    Text("Camera permission is required to use this feature. Please grant the permission when prompted.")
                                 }
                             },
                             confirmButton = {
                                 Button(onClick = {
                                     showPermissionDialog.value = false
+                                    // Only request permission if it's not already granted
                                     if (!hasCameraPermission.value) {
-                                        // Request permission when OK is clicked if not granted
                                         permissionLauncher.launch(Manifest.permission.CAMERA)
                                     }
                                 }) {
+                                    // Button text can be "OK" regardless of status
                                     Text("OK")
                                 }
                             }
