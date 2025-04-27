@@ -351,7 +351,7 @@ class MainActivity : ComponentActivity() {
                                 },
                                 enabled = !isCapturing.value && hasCameraPermission.value // Disable button if capturing or no permission
                             ) {
-                                Text("Capture")
+                                Text("Generate")
                             }
                         } else {
                             // Show a message if permission is not granted
@@ -398,7 +398,7 @@ class MainActivity : ComponentActivity() {
                                             // Show a confirmation message
                                             coroutineScope.launch {
                                                 snackbarHostState.showSnackbar(
-                                                    message = "Number copied to clipboard",
+                                                    message = "Generated number copied to clipboard",
                                                     duration = SnackbarDuration.Short
                                                 )
                                             }
@@ -414,7 +414,7 @@ class MainActivity : ComponentActivity() {
                                         showResultDialog.value = false
                                         isCopied = false // Reset isCopied when dialog is dismissed
                                     }) {
-                                        Text("OK")
+                                        Text("Close")
                                     }
                                 }
                             }
