@@ -48,6 +48,11 @@ import java.nio.ByteBuffer
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
+// Import Material Icons
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CameraAlt
+
 
 class MainActivity : ComponentActivity() {
 
@@ -371,21 +376,42 @@ class MainActivity : ComponentActivity() {
                                 modifier = Modifier.padding(horizontal = 8.dp) // Added horizontal padding to text
                             )
 
-                            // --- Real-time Status Indicators ---
+                            // --- Real-time Status Indicators with Icons ---
                             // Camera Cover Status
-                            Text(
-                                text = if (isCameraCovered) "Camera Covered: Yes" else "Camera Covered: No (Cover the lens!)",
-                                color = if (isCameraCovered) Color.Green else Color.Red,
-                                style = MaterialTheme.typography.bodyMedium
-                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                if (isCameraCovered) {
+                                    Icon(
+                                        imageVector = Icons.Default.Check,
+                                        contentDescription = "Camera Covered",
+                                        tint = Color.Green,
+                                        modifier = Modifier.size(20.dp).padding(end = 4.dp)
+                                    )
+                                }
+                                Text(
+                                    text = if (isCameraCovered) "Camera Covered: Yes" else "Camera Covered: No (Cover the lens!)",
+                                    color = if (isCameraCovered) Color.Green else Color.Red,
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                            }
+
 
                             // Temperature Status
-                            Text(
-                                text = if (isTemperatureHigh) "Temperature: High (${currentBatteryTemperature / 10.0}°C) - May increase noise" else "Temperature: Normal (${currentBatteryTemperature / 10.0}°C)",
-                                color = if (isTemperatureHigh) Color.Yellow else Color.Green, // Use Yellow for warning
-                                style = MaterialTheme.typography.bodyMedium
-                            )
-                            // --- End Real-time Status Indicators ---
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                if (!isTemperatureHigh) { // Show checkmark if temperature is NOT high (i.e., normal)
+                                    Icon(
+                                        imageVector = Icons.Default.Check,
+                                        contentDescription = "Temperature Normal",
+                                        tint = Color.Green,
+                                        modifier = Modifier.size(20.dp).padding(end = 4.dp)
+                                    )
+                                }
+                                Text(
+                                    text = if (isTemperatureHigh) "Temperature: High (${currentBatteryTemperature / 10.0}°C) - May increase noise" else "Temperature: Normal (${currentBatteryTemperature / 10.0}°C)",
+                                    color = if (isTemperatureHigh) Color.Yellow else Color.Green, // Use Yellow for warning
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                            }
+                            // --- End Real-time Status Indicators with Icons ---
 
 
                             // Button with enabled state controlled by isCapturing
@@ -473,6 +499,12 @@ class MainActivity : ComponentActivity() {
                                 },
                                 enabled = !isCapturing.value && hasCameraPermission.value // Disable button if capturing or no permission
                             ) {
+                                // Content of the button (Icon and Text)
+                                Icon(
+                                    imageVector = Icons.Default.CameraAlt, // Use CameraAlt icon
+                                    contentDescription = "Generate Number",
+                                    modifier = Modifier.size(20.dp).padding(end = 4.dp) // Adjust size and spacing
+                                )
                                 Text("Generate")
                             }
                         } else {
