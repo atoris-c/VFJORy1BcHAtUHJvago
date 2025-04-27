@@ -1,4 +1,5 @@
 package com.sknproj.qrng
+
 import android.content.pm.PackageManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -57,6 +58,7 @@ import androidx.compose.foundation.layout.padding
 import com.google.accompanist.systemuicontroller.rememberSystemUiController
 import android.content.ClipData
 import android.content.ClipboardManager
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHostState
@@ -65,6 +67,8 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import kotlinx.coroutines.launch
 import androidx.compose.material3.SnackbarHost
+import androidx.compose.runtime.getValue // Import for state delegation
+import androidx.compose.runtime.setValue // Import for state delegation
 
 
 class MainActivity : ComponentActivity() {
@@ -106,6 +110,10 @@ class MainActivity : ComponentActivity() {
                 val showPermissionDialog = remember { mutableStateOf(true) }
                 // hasCameraPermission checks the status on startup
                 val hasCameraPermission = remember { mutableStateOf(ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) }
+
+                // New state variable for tracking if the Copy button has been pressed
+                var isCopied by remember { mutableStateOf(false) }
+
 
                 val context = LocalContext.current
                 val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
@@ -271,8 +279,9 @@ class MainActivity : ComponentActivity() {
                             AndroidView(
                                 factory = { previewView },
                                 modifier = Modifier
-                                    .fillMaxHeight(0.6f) // Reduced camera preview height to 60% of available space
-                                    .fillMaxWidth() // Ensure it fills the width within the limited height
+                                    .fillMaxWidth() // Make it fill the width
+                                    .aspectRatio(1f) // Add this to make it a 1:1 aspect ratio (square)
+                                    // Removed .fillMaxHeight(0.6f)
                                     .clip(RoundedCornerShape(16.dp)) // Added rounded corners to the camera preview
                             )
                             // Instruction text with padding
@@ -302,6 +311,9 @@ class MainActivity : ComponentActivity() {
                                                                     randomNumber.value = number.toString()
                                                                     showResultDialog.value = true
                                                                     showLoading.value = false
+                                                                    // Reset isCopied state when a new number is generated and shown
+                                                                    isCopied = false
+
                                                                 } catch (e: IllegalStateException) {
                                                                     println("Error: ${e.message}")
                                                                     errorMessage.value = e.message ?: "An error occurred during processing."
@@ -365,7 +377,10 @@ class MainActivity : ComponentActivity() {
                     // Dialogs remain the same (they are drawn on top of the UI)
                     if (showResultDialog.value && randomNumber.value != null) {
                         AlertDialog(
-                            onDismissRequest = { showResultDialog.value = false },
+                            onDismissRequest = {
+                                showResultDialog.value = false
+                                isCopied = false // Reset isCopied when dialog is dismissed
+                            },
                             title = { Text("Generated Number") },
                             text = { Text(randomNumber.value!!) },
                             confirmButton = {
@@ -378,6 +393,8 @@ class MainActivity : ComponentActivity() {
                                         onClick = {
                                             // Copy the number to the clipboard
                                             clipboardManager.setText(AnnotatedString(randomNumber.value!!))
+                                            // Set isCopied to true
+                                            isCopied = true
                                             // Show a confirmation message
                                             coroutineScope.launch {
                                                 snackbarHostState.showSnackbar(
@@ -387,12 +404,16 @@ class MainActivity : ComponentActivity() {
                                             }
                                             // Optionally close the dialog after copying
                                             // showResultDialog.value = false
-                                        }
+                                        },
+                                        enabled = !isCopied // Disable button if already copied
                                     ) {
-                                        Text("Copy")
+                                        Text(if (isCopied) "Copied" else "Copy")
                                     }
                                     // OK Button
-                                    Button(onClick = { showResultDialog.value = false }) {
+                                    Button(onClick = {
+                                        showResultDialog.value = false
+                                        isCopied = false // Reset isCopied when dialog is dismissed
+                                    }) {
                                         Text("OK")
                                     }
                                 }
