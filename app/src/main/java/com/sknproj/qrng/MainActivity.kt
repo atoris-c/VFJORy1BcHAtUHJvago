@@ -17,6 +17,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.CameraState
+import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
@@ -43,6 +44,9 @@ import androidx.core.view.WindowCompat
 import com.google.accompanist.systemuicontroller.rememberSystemUiController
 import com.sknproj.qrng.ui.theme.QRNGTheme
 import kotlinx.coroutines.launch
+import java.nio.ByteBuffer
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
 
 class MainActivity : ComponentActivity() {
@@ -50,22 +54,67 @@ class MainActivity : ComponentActivity() {
     // State variable to hold the current battery temperature
     private var currentBatteryTemperature by mutableStateOf(0) // Temperature in tenths of a degree Celsius
 
+    // State variables for the real-time status indicators
+    private var isCameraCovered by mutableStateOf(false)
+    private var isTemperatureHigh by mutableStateOf(false)
+    private val tempThreshold = 45.0 // Warning threshold in Celsius for display
+    private val cameraCoverLuminanceThreshold = 30.0 // Luminance threshold for real-time camera cover detection
+
+    // Executor for image analysis
+    private lateinit var cameraExecutor: ExecutorService
+
     // BroadcastReceiver to listen for battery changes
     private val batteryInfoReceiver: BroadcastReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             if (Intent.ACTION_BATTERY_CHANGED == intent.action) {
                 // Get the temperature from the intent extra
                 currentBatteryTemperature = intent.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0)
+                // Update temperature status based on the threshold
+                isTemperatureHigh = (currentBatteryTemperature / 10.0) > tempThreshold
             }
+        }
+    }
+
+    // Analyzer for real-time luminance check
+    private inner class LuminanceAnalyzer(private val onLuminanceAnalyzed: (Double) -> Unit) : ImageAnalysis.Analyzer {
+
+        // Helper function to convert ByteBuffer to ByteArray
+        private fun ByteBuffer.toByteArray(): ByteArray {
+            rewind()    // Rewind the buffer to zero
+            val data = ByteArray(remaining())
+            get(data)   // Copy the buffer into a byte array
+            return data // Return the byte array
+        }
+
+        override fun analyze(image: ImageProxy) {
+            // Access the Y plane (luminance) which is at index 0
+            val buffer = image.planes[0].buffer
+            val data = buffer.toByteArray()
+
+            // Calculate average luminance from the Y plane data
+            // We only need the unsigned byte values for luminance calculation
+            val pixels = data.map { it.toInt() and 0xFF }
+
+            val averageLuminance = if (pixels.isNotEmpty()) pixels.average() else 0.0
+
+            // Call the callback with the average luminance
+            onLuminanceAnalyzed(averageLuminance)
+
+            // Close the image proxy to release the buffer
+            image.close()
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // Initialize the camera executor
+        cameraExecutor = Executors.newSingleThreadExecutor()
+
         // Register the battery info receiver when the activity is created
         val batteryFilter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
-        registerReceiver(batteryInfoReceiver, batteryFilter)
+        // Use ContextCompat.registerReceiver for better compatibility and handling exported receivers
+        ContextCompat.registerReceiver(this, batteryInfoReceiver, batteryFilter, ContextCompat.RECEIVER_NOT_EXPORTED)
 
 
         // Enable drawing behind the system bars
@@ -133,12 +182,25 @@ class MainActivity : ComponentActivity() {
                             val preview = Preview.Builder().build().also {
                                 it.surfaceProvider = previewView.surfaceProvider
                             }
+
+                            // Setup ImageAnalysis for real-time luminance check
+                            val imageAnalyzer = ImageAnalysis.Builder()
+                                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST) // Only analyze the latest frame
+                                .build()
+                                .also {
+                                    it.setAnalyzer(cameraExecutor, LuminanceAnalyzer { luminance ->
+                                        // Update the camera covered status based on real-time luminance
+                                        isCameraCovered = luminance < cameraCoverLuminanceThreshold
+                                    })
+                                }
+
                             val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
 
                             try {
                                 cameraProvider.unbindAll()
+                                // Bind Preview, ImageCapture, and ImageAnalysis
                                 val camera = cameraProvider.bindToLifecycle(
-                                    this@MainActivity, cameraSelector, preview, imageCapture
+                                    this@MainActivity, cameraSelector, preview, imageCapture, imageAnalyzer
                                 )
                                 cameraState.value = camera // Store the Camera instance
 
@@ -166,12 +228,25 @@ class MainActivity : ComponentActivity() {
                             val preview = Preview.Builder().build().also {
                                 it.surfaceProvider = previewView.surfaceProvider
                             }
+
+                            // Setup ImageAnalysis for real-time luminance check
+                            val imageAnalyzer = ImageAnalysis.Builder()
+                                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST) // Only analyze the latest frame
+                                .build()
+                                .also {
+                                    it.setAnalyzer(cameraExecutor, LuminanceAnalyzer { luminance ->
+                                        // Update the camera covered status based on real-time luminance
+                                        isCameraCovered = luminance < cameraCoverLuminanceThreshold
+                                    })
+                                }
+
                             val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
 
                             try {
                                 cameraProvider.unbindAll()
+                                // Bind Preview, ImageCapture, and ImageAnalysis
                                 val camera = cameraProvider.bindToLifecycle(
-                                    this@MainActivity, cameraSelector, preview, imageCapture
+                                    this@MainActivity, cameraSelector, preview, imageCapture, imageAnalyzer
                                 )
                                 cameraState.value = camera // Store the Camera instance
 
@@ -195,12 +270,25 @@ class MainActivity : ComponentActivity() {
                         val preview = Preview.Builder().build().also {
                             it.surfaceProvider = previewView.surfaceProvider
                         }
+
+                        // Setup ImageAnalysis for real-time luminance check
+                        val imageAnalyzer = ImageAnalysis.Builder()
+                            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST) // Only analyze the latest frame
+                            .build()
+                            .also {
+                                it.setAnalyzer(cameraExecutor, LuminanceAnalyzer { luminance ->
+                                    // Update the camera covered status based on real-time luminance
+                                    isCameraCovered = luminance < cameraCoverLuminanceThreshold
+                                })
+                            }
+
                         val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
 
                         try {
                             cameraProvider.unbindAll()
+                            // Bind Preview, ImageCapture, and ImageAnalysis
                             val camera = cameraProvider.bindToLifecycle(
-                                this@MainActivity, cameraSelector, preview, imageCapture
+                                this@MainActivity, cameraSelector, preview, imageCapture, imageAnalyzer
                             )
                             cameraState.value = camera // Store the Camera instance
 
@@ -266,7 +354,7 @@ class MainActivity : ComponentActivity() {
                             .padding(top = 16.dp) // Add top padding for .content spacing
                             .padding(horizontal = 16.dp), // Add horizontal padding to content
                         horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                        verticalArrangement = Arrangement.spacedBy(8.dp) // Reduced spacing to fit indicators
                     ) {
                         if (hasCameraPermission.value) { // Only show preview if permission is granted
                             AndroidView(
@@ -282,6 +370,24 @@ class MainActivity : ComponentActivity() {
                                 "Please cover the camera sensor and press the button to capture.",
                                 modifier = Modifier.padding(horizontal = 8.dp) // Added horizontal padding to text
                             )
+
+                            // --- Real-time Status Indicators ---
+                            // Camera Cover Status
+                            Text(
+                                text = if (isCameraCovered) "Camera Covered: Yes" else "Camera Covered: No (Cover the lens!)",
+                                color = if (isCameraCovered) Color.Green else Color.Red,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+
+                            // Temperature Status
+                            Text(
+                                text = if (isTemperatureHigh) "Temperature: High (${currentBatteryTemperature / 10.0}°C) - May increase noise" else "Temperature: Normal (${currentBatteryTemperature / 10.0}°C)",
+                                color = if (isTemperatureHigh) Color.Yellow else Color.Green, // Use Yellow for warning
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            // --- End Real-time Status Indicators ---
+
+
                             // Button with enabled state controlled by isCapturing
                             Button(
                                 onClick = {
@@ -300,8 +406,10 @@ class MainActivity : ComponentActivity() {
 
                                                             if (bitmap != null) {
                                                                 // --- Environmental Checks ---
-                                                                // Check if the image is dark (lens covered)
-                                                                if (!isImageDark(bitmap, threshold = 20.0)) { // Threshold 20.0 for average luminance
+                                                                // The real-time analysis updates isCameraCovered,
+                                                                // but we can still perform a final check on the captured image
+                                                                val isDarkOnCapture = isImageDark(bitmap, threshold = 20.0)
+                                                                if (!isDarkOnCapture) {
                                                                     errorMessage.value = "Please ensure the camera lens is completely covered."
                                                                     showErrorDialog.value = true
                                                                     showLoading.value = false
@@ -309,12 +417,11 @@ class MainActivity : ComponentActivity() {
                                                                     return // Stop processing if image is not dark
                                                                 }
 
-                                                                // Check device temperature using the state updated by the BroadcastReceiver
-                                                                val tempCelsius = currentBatteryTemperature / 10.0
-                                                                val tempThreshold = 45.0 // Warning threshold in Celsius
+                                                                // Temperature status is updated by the BroadcastReceiver
+                                                                // isTemperatureHigh state is already updated
 
-                                                                if (tempCelsius > tempThreshold) {
-                                                                    errorMessage.value = "Device temperature is high (${tempCelsius}°C). This might increase noise. Consider letting the device cool down."
+                                                                if (isTemperatureHigh) {
+                                                                    errorMessage.value = "Device temperature is high (${currentBatteryTemperature / 10.0}°C). This might increase noise. Consider letting the device cool down."
                                                                     showErrorDialog.value = true
                                                                     // We still allow generation, but warn the user
                                                                 }
@@ -487,90 +594,92 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // Unregister the receiver when the activity is destroyed
+    // Unregister the receiver and shut down the executor when the activity is destroyed
     override fun onDestroy() {
         super.onDestroy()
         unregisterReceiver(batteryInfoReceiver)
-    }
-}
-
-// Helper function to check if the image is predominantly dark (lens covered)
-// Calculates the average luminance and checks if it's below a threshold.
-fun isImageDark(bitmap: Bitmap, threshold: Double): Boolean {
-    val width = bitmap.width
-    val height = bitmap.height
-    var totalLuminance = 0.0
-    val pixels = IntArray(width * height)
-    bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
-
-    // Calculate total luminance
-    for (pixel in pixels) {
-        val red = (pixel shr 16) and 0xFF
-        val green = (pixel shr 8) and 0xFF
-        val blue = pixel and 0xFF
-        // Calculate luminance using a common formula
-        val luminance = 0.299 * red + 0.587 * green + 0.114 * blue
-        totalLuminance += luminance
+        cameraExecutor.shutdown() // Shut down the executor
     }
 
-    // Calculate average luminance
-    val averageLuminance = totalLuminance / (width * height)
+    // Helper function to check if the image is predominantly dark (lens covered)
+    // Calculates the average luminance and checks if it's below a threshold.
+    // This is still used for a final check on the captured image.
+    fun isImageDark(bitmap: Bitmap, threshold: Double): Boolean {
+        val width = bitmap.width
+        val height = bitmap.height
+        var totalLuminance = 0.0
+        val pixels = IntArray(width * height)
+        bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
 
-    // Check if average luminance is below the threshold
-    return averageLuminance < threshold
-}
-
-
-// Helper functions remain unchanged
-fun ImageProxy.toBitmapNullable(): Bitmap? {
-    val buffer = planes[0].buffer
-    buffer.rewind()
-    val bytes = ByteArray(buffer.remaining()) // Use remaining() instead of capacity()
-    buffer.get(bytes)
-    return BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-}
-
-fun vonNeumannCorrector(bits: String): String {
-    val correctedBits = StringBuilder()
-    for (i in 0 until bits.length - 1 step 2) {
-        val pair = bits.substring(i, i + 2)
-        when (pair) {
-            "01" -> correctedBits.append('0')  // 01 becomes 0
-            "10" -> correctedBits.append('1')  // 10 becomes 1
-            // "00" and "11" are discarded
+        // Calculate total luminance
+        for (pixel in pixels) {
+            val red = (pixel shr 16) and 0xFF
+            val green = (pixel shr 8) and 0xFF
+            val blue = pixel and 0xFF
+            // Calculate luminance using a common formula
+            val luminance = 0.299 * red + 0.587 * green + 0.114 * blue
+            totalLuminance += luminance
         }
-    }
-    return correctedBits.toString()
-}
 
-fun processImage(bitmap: Bitmap): Int {
-    val width = bitmap.width
-    val height = bitmap.height
-    val pixels = IntArray(width * height)
-    bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
+        // Calculate average luminance
+        val averageLuminance = totalLuminance / (width * height)
 
-    val randomBits = StringBuilder()
-    for (pixel in pixels) {
-        val red = (pixel shr 16) and 0xFF
-        val green = (pixel shr 8) and 0xFF
-        val blue = pixel and 0xFF
-        val lsbRed = red and 1
-        val lsbGreen = green and 1
-        val lsbBlue = blue and 1
-        val randomBit = lsbRed xor lsbGreen xor lsbBlue
-        randomBits.append(randomBit)
+        // Check if average luminance is below the threshold
+        return averageLuminance < threshold
     }
 
-    val rawBits = randomBits.toString()
-    var whitenedBits = vonNeumannCorrector(rawBits)
 
-    // If not enough bits, process more data or retry
-    if (whitenedBits.length < 32) {
-        // For simplicity, pad with zeros or retry; in practice, gather more bits
-        throw IllegalStateException("Only ${whitenedBits.length} bits after whitening, need 32")
-        // Alternative: while (whitenedBits.length < 32) whitenedBits += "0"
-    } else {
-        val selectedBits = whitenedBits.substring(0, 32)
-        return selectedBits.toUInt(2).toInt()
+    // Helper functions remain unchanged
+    fun ImageProxy.toBitmapNullable(): Bitmap? {
+        val buffer = planes[0].buffer
+        buffer.rewind()
+        val bytes = ByteArray(buffer.remaining()) // Use remaining() instead of capacity()
+        buffer.get(bytes)
+        return BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+    }
+
+    fun vonNeumannCorrector(bits: String): String {
+        val correctedBits = StringBuilder()
+        for (i in 0 until bits.length - 1 step 2) {
+            val pair = bits.substring(i, i + 2)
+            when (pair) {
+                "01" -> correctedBits.append('0')  // 01 becomes 0
+                "10" -> correctedBits.append('1')  // 10 becomes 1
+                // "00" and "11" are discarded
+            }
+        }
+        return correctedBits.toString()
+    }
+
+    fun processImage(bitmap: Bitmap): Int {
+        val width = bitmap.width
+        val height = bitmap.height
+        val pixels = IntArray(width * height)
+        bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
+
+        val randomBits = StringBuilder()
+        for (pixel in pixels) {
+            val red = (pixel shr 16) and 0xFF
+            val green = (pixel shr 8) and 0xFF
+            val blue = pixel and 0xFF
+            val lsbRed = red and 1
+            val lsbGreen = green and 1
+            val lsbBlue = blue and 1
+            val randomBit = lsbRed xor lsbGreen xor lsbBlue
+            randomBits.append(randomBit)
+        }
+
+        val rawBits = randomBits.toString()
+        var whitenedBits = vonNeumannCorrector(rawBits)
+
+        // If not enough bits, process more data or retry
+        if (whitenedBits.length < 32) {
+            // For simplicity, pad with zeros or retry; in practice, gather more bits
+            throw IllegalStateException("Only ${whitenedBits.length} bits after whitening, need 32")
+            // Alternative: while (whitenedBits.length < 32) whitenedBits += "0"
+        } else {
+            val selectedBits = whitenedBits.substring(0, 32)
+            return selectedBits.toUInt(2).toInt()
+        }
     }
 }
