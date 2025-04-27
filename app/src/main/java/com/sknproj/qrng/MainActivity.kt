@@ -1,6 +1,10 @@
 package com.sknproj.qrng
 
 import android.Manifest
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -20,36 +24,10 @@ import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.statusBars
-import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Snackbar
-import androidx.compose.material3.SnackbarDuration
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.SideEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -68,8 +46,27 @@ import kotlinx.coroutines.launch
 
 
 class MainActivity : ComponentActivity() {
+
+    // State variable to hold the current battery temperature
+    private var currentBatteryTemperature by mutableStateOf(0) // Temperature in tenths of a degree Celsius
+
+    // BroadcastReceiver to listen for battery changes
+    private val batteryInfoReceiver: BroadcastReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (Intent.ACTION_BATTERY_CHANGED == intent.action) {
+                // Get the temperature from the intent extra
+                currentBatteryTemperature = intent.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0)
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Register the battery info receiver when the activity is created
+        val batteryFilter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
+        registerReceiver(batteryInfoReceiver, batteryFilter)
+
 
         // Enable drawing behind the system bars
         WindowCompat.setDecorFitsSystemWindows(window, false)
@@ -312,22 +309,14 @@ class MainActivity : ComponentActivity() {
                                                                     return // Stop processing if image is not dark
                                                                 }
 
-                                                                // Check device temperature
-                                                                val batteryManager = context.getSystemService(
-                                                                    BATTERY_SERVICE
-                                                                ) as BatteryManager
-                                                                // BATTERY_PROPERTY_TEMPERATURE requires API level 29 or higher
-                                                                val temperature = batteryManager.getIntProperty(BatteryManager.BATTERY_PROPERTY_TEMPERATURE) // Temperature in tenths of a degree Celsius
-                                                                val tempCelsius = temperature / 10.0
+                                                                // Check device temperature using the state updated by the BroadcastReceiver
+                                                                val tempCelsius = currentBatteryTemperature / 10.0
                                                                 val tempThreshold = 45.0 // Warning threshold in Celsius
 
                                                                 if (tempCelsius > tempThreshold) {
                                                                     errorMessage.value = "Device temperature is high (${tempCelsius}°C). This might increase noise. Consider letting the device cool down."
                                                                     showErrorDialog.value = true
                                                                     // We still allow generation, but warn the user
-                                                                    // showLoading.value = false // Keep loading indicator while processing
-                                                                    // isCapturing.value = false // Keep capturing state while processing
-                                                                    // return // Do NOT return, just warn
                                                                 }
                                                                 // --- End Environmental Checks ---
 
@@ -497,6 +486,12 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    // Unregister the receiver when the activity is destroyed
+    override fun onDestroy() {
+        super.onDestroy()
+        unregisterReceiver(batteryInfoReceiver)
+    }
 }
 
 // Helper function to check if the image is predominantly dark (lens covered)
@@ -578,9 +573,4 @@ fun processImage(bitmap: Bitmap): Int {
         val selectedBits = whitenedBits.substring(0, 32)
         return selectedBits.toUInt(2).toInt()
     }
-}
-
-@Composable
-fun rememberSystemUiController(): com.google.accompanist.systemuicontroller.SystemUiController {
-    return rememberSystemUiController()
 }
