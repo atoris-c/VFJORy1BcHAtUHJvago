@@ -55,6 +55,16 @@ import androidx.compose.foundation.layout.windowInsetsPadding // Import windowIn
 import androidx.compose.runtime.Composable // Import Composable
 import androidx.compose.foundation.layout.padding
 import com.google.accompanist.systemuicontroller.rememberSystemUiController
+import android.content.ClipData
+import android.content.ClipboardManager
+import androidx.compose.material3.Snackbar
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
+import kotlinx.coroutines.launch
+import androidx.compose.material3.SnackbarHost
 
 
 class MainActivity : ComponentActivity() {
@@ -83,7 +93,6 @@ class MainActivity : ComponentActivity() {
                     // )
                 }
 
-
                 // State variables
                 val isCapturing = remember { mutableStateOf(false) }
                 val showLoading = remember { mutableStateOf(false) }
@@ -98,12 +107,18 @@ class MainActivity : ComponentActivity() {
                 // hasCameraPermission checks the status on startup
                 val hasCameraPermission = remember { mutableStateOf(ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) }
 
-
                 val context = LocalContext.current
                 val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
                 val previewView = remember { PreviewView(context) }
                 val imageCapture = remember { ImageCapture.Builder().build() }
                 val lifecycleOwner = LocalLifecycleOwner.current
+
+                // Get ClipboardManager
+                val clipboardManager = LocalClipboardManager.current
+
+                // Coroutine scope for showing Snackbar
+                val coroutineScope = rememberCoroutineScope()
+                val snackbarHostState = remember { SnackbarHostState() }
 
                 // Permission request launcher
                 val permissionLauncher = rememberLauncherForActivityResult(
@@ -322,7 +337,7 @@ class MainActivity : ComponentActivity() {
                                         }
                                     }
                                 },
-                                enabled = !isCapturing.value
+                                enabled = !isCapturing.value && hasCameraPermission.value // Disable button if capturing or no permission
                             ) {
                                 Text("Capture")
                             }
@@ -335,6 +350,16 @@ class MainActivity : ComponentActivity() {
                         if (showLoading.value) {
                             CircularProgressIndicator()
                         }
+
+                        // Snackbar host for showing messages
+                        SnackbarHost(hostState = snackbarHostState) { data ->
+                            Snackbar(
+                                snackbarData = data,
+                                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                        }
+
                     } // End of Main UI Content Column
 
                     // Dialogs remain the same (they are drawn on top of the UI)
@@ -344,8 +369,32 @@ class MainActivity : ComponentActivity() {
                             title = { Text("Generated Number") },
                             text = { Text(randomNumber.value!!) },
                             confirmButton = {
-                                Button(onClick = { showResultDialog.value = false }) {
-                                    Text("OK")
+                                // Use a Row to place multiple buttons
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp) // Add spacing between buttons
+                                ) {
+                                    // Copy Button
+                                    Button(
+                                        onClick = {
+                                            // Copy the number to the clipboard
+                                            clipboardManager.setText(AnnotatedString(randomNumber.value!!))
+                                            // Show a confirmation message
+                                            coroutineScope.launch {
+                                                snackbarHostState.showSnackbar(
+                                                    message = "Number copied to clipboard",
+                                                    duration = SnackbarDuration.Short
+                                                )
+                                            }
+                                            // Optionally close the dialog after copying
+                                            // showResultDialog.value = false
+                                        }
+                                    ) {
+                                        Text("Copy")
+                                    }
+                                    // OK Button
+                                    Button(onClick = { showResultDialog.value = false }) {
+                                        Text("OK")
+                                    }
                                 }
                             }
                         )
