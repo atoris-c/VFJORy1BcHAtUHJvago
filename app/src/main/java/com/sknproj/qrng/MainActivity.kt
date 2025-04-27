@@ -69,6 +69,9 @@ import kotlinx.coroutines.launch
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.runtime.getValue // Import for state delegation
 import androidx.compose.runtime.setValue // Import for state delegation
+import android.os.BatteryManager // Import BatteryManager for temperature check
+import android.content.Context // Import Context for getSystemService
+import androidx.lifecycle.compose.LocalLifecycleOwner
 
 
 class MainActivity : ComponentActivity() {
@@ -119,7 +122,7 @@ class MainActivity : ComponentActivity() {
                 val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
                 val previewView = remember { PreviewView(context) }
                 val imageCapture = remember { ImageCapture.Builder().build() }
-                val lifecycleOwner = LocalLifecycleOwner.current
+                val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
 
                 // Get ClipboardManager
                 val clipboardManager = LocalClipboardManager.current
@@ -138,7 +141,7 @@ class MainActivity : ComponentActivity() {
                         cameraProviderFuture.addListener({
                             val cameraProvider = cameraProviderFuture.get()
                             val preview = Preview.Builder().build().also {
-                                it.setSurfaceProvider(previewView.surfaceProvider)
+                                it.surfaceProvider = previewView.surfaceProvider
                             }
                             val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
 
@@ -171,7 +174,7 @@ class MainActivity : ComponentActivity() {
                         cameraProviderFuture.addListener({
                             val cameraProvider = cameraProviderFuture.get()
                             val preview = Preview.Builder().build().also {
-                                it.setSurfaceProvider(previewView.surfaceProvider)
+                                it.surfaceProvider = previewView.surfaceProvider
                             }
                             val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
 
@@ -200,7 +203,7 @@ class MainActivity : ComponentActivity() {
                     cameraProviderFuture.addListener({
                         val cameraProvider = cameraProviderFuture.get()
                         val preview = Preview.Builder().build().also {
-                            it.setSurfaceProvider(previewView.surfaceProvider)
+                            it.surfaceProvider = previewView.surfaceProvider
                         }
                         val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
 
@@ -303,8 +306,38 @@ class MainActivity : ComponentActivity() {
                                                         try {
                                                             println("Image captured")
                                                             val bitmap = image.toBitmapNullable()
-                                                            image.close()
+                                                            image.close() // Close the image proxy
+
                                                             if (bitmap != null) {
+                                                                // --- Environmental Checks ---
+                                                                // Check if the image is dark (lens covered)
+                                                                if (!isImageDark(bitmap, threshold = 20.0)) { // Threshold 20.0 for average luminance
+                                                                    errorMessage.value = "Please ensure the camera lens is completely covered."
+                                                                    showErrorDialog.value = true
+                                                                    showLoading.value = false
+                                                                    isCapturing.value = false
+                                                                    return // Stop processing if image is not dark
+                                                                }
+
+                                                                // Check device temperature
+                                                                val batteryManager = context.getSystemService(
+                                                                    BATTERY_SERVICE
+                                                                ) as BatteryManager
+                                                                // BATTERY_PROPERTY_TEMPERATURE requires API level 29 or higher
+                                                                val temperature = batteryManager.getIntProperty(BatteryManager.BATTERY_PROPERTY_TEMPERATURE) // Temperature in tenths of a degree Celsius
+                                                                val tempCelsius = temperature / 10.0
+                                                                val tempThreshold = 45.0 // Warning threshold in Celsius
+
+                                                                if (tempCelsius > tempThreshold) {
+                                                                    errorMessage.value = "Device temperature is high (${tempCelsius}°C). This might increase noise. Consider letting the device cool down."
+                                                                    showErrorDialog.value = true
+                                                                    // We still allow generation, but warn the user
+                                                                    // showLoading.value = false // Keep loading indicator while processing
+                                                                    // isCapturing.value = false // Keep capturing state while processing
+                                                                    // return // Do NOT return, just warn
+                                                                }
+                                                                // --- End Environmental Checks ---
+
                                                                 try {
                                                                     val number = processImage(bitmap)
                                                                     println("Number: $number")
@@ -332,7 +365,7 @@ class MainActivity : ComponentActivity() {
                                                             showErrorDialog.value = true
                                                             showLoading.value = false
                                                         } finally {
-                                                            isCapturing.value = false
+                                                            isCapturing.value = false // Ensure capturing state is reset
                                                         }
 
                                                     }
@@ -342,7 +375,7 @@ class MainActivity : ComponentActivity() {
                                                         errorMessage.value = "Image capture failed: ${exception.message}"
                                                         showErrorDialog.value = true
                                                         showLoading.value = false
-                                                        isCapturing.value = false
+                                                        isCapturing.value = false // Ensure capturing state is reset
                                                     }
                                                 }
                                             )
@@ -449,6 +482,7 @@ class MainActivity : ComponentActivity() {
                                 if (hasCameraPermission.value) {
                                     Text("Camera permission has been granted. You can now use the QRNG feature.")
                                 } else {
+                                    // Corrected the typo here
                                     Text("Camera permission is required to use this feature. Please grant the permission when prompted.")
                                 }
                             },
@@ -471,6 +505,33 @@ class MainActivity : ComponentActivity() {
         }
     }
 }
+
+// Helper function to check if the image is predominantly dark (lens covered)
+// Calculates the average luminance and checks if it's below a threshold.
+fun isImageDark(bitmap: Bitmap, threshold: Double): Boolean {
+    val width = bitmap.width
+    val height = bitmap.height
+    var totalLuminance = 0.0
+    val pixels = IntArray(width * height)
+    bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
+
+    // Calculate total luminance
+    for (pixel in pixels) {
+        val red = (pixel shr 16) and 0xFF
+        val green = (pixel shr 8) and 0xFF
+        val blue = pixel and 0xFF
+        // Calculate luminance using a common formula
+        val luminance = 0.299 * red + 0.587 * green + 0.114 * blue
+        totalLuminance += luminance
+    }
+
+    // Calculate average luminance
+    val averageLuminance = totalLuminance / (width * height)
+
+    // Check if average luminance is below the threshold
+    return averageLuminance < threshold
+}
+
 
 // Helper functions remain unchanged
 fun ImageProxy.toBitmapNullable(): Bitmap? {
@@ -528,5 +589,5 @@ fun processImage(bitmap: Bitmap): Int {
 
 @Composable
 fun rememberSystemUiController(): com.google.accompanist.systemuicontroller.SystemUiController {
-    return com.google.accompanist.systemuicontroller.rememberSystemUiController()
+    return rememberSystemUiController()
 }
