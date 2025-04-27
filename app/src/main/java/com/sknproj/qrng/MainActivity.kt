@@ -1,77 +1,70 @@
 package com.sknproj.qrng
 
+import android.Manifest
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.os.BatteryManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.CameraState
 import androidx.camera.core.ImageCapture
+import androidx.camera.core.ImageCaptureException
+import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Text
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.viewinterop.AndroidView
-import androidx.core.content.ContextCompat
-import com.sknproj.qrng.ui.theme.QRNGTheme
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import androidx.camera.core.Camera
-import androidx.camera.core.CameraState
-import androidx.camera.core.ImageProxy
-import androidx.camera.core.ImageCaptureException
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.ui.platform.LocalLifecycleOwner
-import android.Manifest
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.fillMaxHeight // Import for fillMaxHeight
-import androidx.compose.ui.unit.dp // Import for dp
-import androidx.compose.ui.Alignment // Import for Alignment
-import androidx.compose.foundation.layout.Spacer // Import for Spacer
-import androidx.compose.foundation.layout.height // Import for height
-import androidx.compose.foundation.layout.Arrangement // Import for Arrangement
-import androidx.compose.foundation.shape.RoundedCornerShape // Import for RoundedCornerShape
-import androidx.compose.ui.draw.clip // Import for clip
-import androidx.compose.material3.MaterialTheme // Import MaterialTheme for colors
-import androidx.compose.foundation.background // Import background modifier
-import androidx.compose.foundation.layout.Row // Import Row for header layout
-import androidx.compose.foundation.layout.fillMaxWidth // Import fillMaxWidth
-import androidx.compose.ui.text.font.FontWeight // Import FontWeight
-import androidx.compose.ui.graphics.Color // Import Color
-import androidx.compose.runtime.SideEffect // Import SideEffect
-import androidx.core.view.WindowCompat // Import WindowCompat
-import androidx.compose.foundation.layout.WindowInsets // Import WindowInsets
-import androidx.compose.foundation.layout.statusBars // Import statusBars
-import androidx.compose.foundation.layout.windowInsetsPadding // Import windowInsetsPadding
-import androidx.compose.runtime.Composable // Import Composable
-import androidx.compose.foundation.layout.padding
-import com.google.accompanist.systemuicontroller.rememberSystemUiController
-import android.content.ClipData
-import android.content.ClipboardManager
-import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarDuration
-import androidx.compose.material3.SnackbarHostState
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.text.AnnotatedString
-import kotlinx.coroutines.launch
 import androidx.compose.material3.SnackbarHost
-import androidx.compose.runtime.getValue // Import for state delegation
-import androidx.compose.runtime.setValue // Import for state delegation
-import android.os.BatteryManager // Import BatteryManager for temperature check
-import android.content.Context // Import Context for getSystemService
-import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
+import com.google.accompanist.systemuicontroller.rememberSystemUiController
+import com.sknproj.qrng.ui.theme.QRNGTheme
+import kotlinx.coroutines.launch
 
 
 class MainActivity : ComponentActivity() {
