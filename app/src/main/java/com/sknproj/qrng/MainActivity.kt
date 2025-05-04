@@ -71,6 +71,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.ContentCopy // Icon for copy
 import androidx.compose.material.icons.filled.Save // Icon for save
+import androidx.compose.material.icons.filled.Info // Import Info icon
 import androidx.compose.ui.platform.Clipboard
 // No longer need LocalClipboard, using LocalClipboardManager
 // import androidx.compose.ui.platform.LocalClipboard
@@ -181,7 +182,7 @@ class MainActivity : ComponentActivity() {
                 val hasCameraPermission = remember { mutableStateOf(ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) }
                 // Removed hasStoragePermission as it's no longer needed for SAF
 
-                // New state variables for batch processing
+                // New state variables for batch processing - Wrapped in remember
                 var batchSize by remember { mutableStateOf("10") } // Default batch size
                 var currentBatchProgress by remember { mutableIntStateOf(0) } // Progress counter
                 var totalBatchSize by remember { mutableIntStateOf(0) } // Total images in the batch
@@ -192,6 +193,9 @@ class MainActivity : ComponentActivity() {
 
                 // State variable for Advanced Mode (Test Data Generation)
                 var isAdvancedMode by remember { mutableStateOf(false) }
+                // State variable to control visibility of the Advanced Mode info dialog
+                var showAdvancedModeInfoDialog by remember { mutableStateOf(false) }
+
 
                 val context = LocalContext.current
                 val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
@@ -293,7 +297,7 @@ class MainActivity : ComponentActivity() {
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text(
-                            text = "TRNG v0.8", // Updated version text
+                            text = "TRNG v0.10", // Updated version text
                             color = onPrimaryColor,
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold,
@@ -374,22 +378,33 @@ class MainActivity : ComponentActivity() {
                                 modifier = Modifier.fillMaxWidth()
                             )
 
-                            // Advanced Mode Toggle
+                            // Advanced Mode Toggle with Info Icon
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
                                 Text("Advanced Mode (Generate Test Data)")
-                                Switch(
-                                    checked = isAdvancedMode,
-                                    onCheckedChange = {
-                                        isAdvancedMode = it
-                                        // Clear previous result when toggling mode
-                                        randomOutput.value = null
-                                        testDataBitstream = null // Also clear the stored test data
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    // Info Icon Button
+                                    IconButton(onClick = { showAdvancedModeInfoDialog = true }) {
+                                        Icon(
+                                            imageVector = Icons.Default.Info,
+                                            contentDescription = "Advanced Mode Info",
+                                            tint = MaterialTheme.colorScheme.primary // Use primary color for the icon
+                                        )
                                     }
-                                )
+                                    // Advanced Mode Switch
+                                    Switch(
+                                        checked = isAdvancedMode,
+                                        onCheckedChange = {
+                                            isAdvancedMode = it
+                                            // Clear previous result when toggling mode
+                                            randomOutput.value = null
+                                            testDataBitstream = null // Also clear the stored test data
+                                        }
+                                    )
+                                }
                             }
 
 
@@ -409,9 +424,9 @@ class MainActivity : ComponentActivity() {
                                         if (isCameraOpened.value) {
                                             isCapturing.value = true
                                             showLoading.value = true
-                                            totalBatchSize = size
-                                            currentBatchProgress = 0
-                                            batchProcessingStatus = "Starting batch..."
+                                            totalBatchSize = size // Use the state variable
+                                            currentBatchProgress = 0 // Use the state variable
+                                            batchProcessingStatus = "Starting batch..." // Use the state variable
                                             randomOutput.value = null // Clear previous result
                                             testDataBitstream = null // Clear previous test data
 
@@ -421,8 +436,8 @@ class MainActivity : ComponentActivity() {
 
                                                 // Loop for batch processing
                                                 for (i in 1..totalBatchSize) {
-                                                    currentBatchProgress = i
-                                                    batchProcessingStatus = "Capturing image $i of $totalBatchSize..."
+                                                    currentBatchProgress = i // Update the state variable
+                                                    batchProcessingStatus = "Capturing image $i of $totalBatchSize..." // Update the state variable
 
                                                     // Capture image using suspendCancellableCoroutine
                                                     val imageProxy = try {
@@ -449,7 +464,7 @@ class MainActivity : ComponentActivity() {
 
                                                     // Now, continue processing the 'imageProxy' after the suspend call resumes.
                                                     if (imageProxy != null) {
-                                                        batchProcessingStatus = "Processing image $i of $totalBatchSize..."
+                                                        batchProcessingStatus = "Processing image $i of $totalBatchSize..." // Update the state variable
                                                         try {
                                                             val bitmap = imageProxy.toBitmapNullable()
                                                             imageProxy.close() // Close the image proxy after converting or processing
@@ -497,7 +512,7 @@ class MainActivity : ComponentActivity() {
                                                 if (batchError != null) {
                                                     errorMessage.value = batchError
                                                     showErrorDialog.value = true
-                                                    batchProcessingStatus = "Batch failed."
+                                                    batchProcessingStatus = "Batch failed." // Update the state variable
                                                 } else {
                                                     // --- Conditional Output based on Advanced Mode ---
                                                     if (isAdvancedMode) {
@@ -505,13 +520,13 @@ class MainActivity : ComponentActivity() {
                                                         testDataBitstream = collectedBits.toString()
                                                         // Update UI state with a summary message
                                                         randomOutput.value = "Test data generated: ${testDataBitstream?.length ?: 0} bits."
-                                                        batchProcessingStatus = "Batch complete. Test data ready."
+                                                        batchProcessingStatus = "Batch complete. Test data ready." // Update the state variable
                                                     } else {
                                                         // Normal Mode: Apply SHA-256 whitening and output the hash
-                                                        batchProcessingStatus = "Batch complete. Applying SHA-256 whitening..."
+                                                        batchProcessingStatus = "Batch complete. Applying SHA-256 whitening..." // Update the state variable
                                                         val finalHashedOutput = applySha256Whitening(collectedBits.toString())
                                                         randomOutput.value = finalHashedOutput // Store the final hashed output
-                                                        batchProcessingStatus = "Whitening complete. Generated ${finalHashedOutput.length * 4} bits (Hexadecimal)." // SHA-256 is 256 bits = 64 hex chars
+                                                        batchProcessingStatus = "Whitening complete. Generated ${finalHashedOutput.length * 4} bits (Hexadecimal)." // SHA-256 is 256 bits = 64 hex chars // Update the state variable
                                                         testDataBitstream = null // Clear test data if not in advanced mode
                                                     }
                                                     // --- End Conditional Output ---
@@ -698,6 +713,25 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }) {
                                     Text("OK")
+                                }
+                            }
+                        )
+                    }
+
+                    // Advanced Mode Info Dialog
+                    if (showAdvancedModeInfoDialog) {
+                        AlertDialog(
+                            onDismissRequest = { showAdvancedModeInfoDialog = false },
+                            title = { Text("Advanced Mode Explanation") },
+                            text = {
+                                Text(
+                                    "Advanced Mode is for generating large amounts of raw random data (Von Neumann corrected bits) for statistical testing using external tools like NIST SP 800-22. \n\n" +
+                                            "In this mode, the app saves the concatenated bitstream from the batch directly to a file instead of applying the final SHA-256 whitening."
+                                )
+                            },
+                            confirmButton = {
+                                Button(onClick = { showAdvancedModeInfoDialog = false }) {
+                                    Text("Got It")
                                 }
                             }
                         )
