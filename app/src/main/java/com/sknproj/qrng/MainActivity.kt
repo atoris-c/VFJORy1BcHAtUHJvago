@@ -36,7 +36,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -47,9 +46,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import com.google.accompanist.systemuicontroller.rememberSystemUiController
 import com.sknproj.qrng.ui.theme.QRNGTheme
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.suspendCancellableCoroutine
 import java.nio.ByteBuffer
 import java.security.MessageDigest // Import for hashing
@@ -62,6 +59,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.ContentCopy // Icon for copy
+import androidx.compose.ui.platform.Clipboard
+import androidx.compose.ui.platform.LocalClipboard
 import kotlin.coroutines.resumeWithException
 
 class MainActivity : ComponentActivity() {
@@ -181,7 +180,7 @@ class MainActivity : ComponentActivity() {
                 val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
 
                 // Get ClipboardManager
-                val clipboardManager = LocalClipboardManager.current
+                val clipboardManager = LocalClipboard.current
 
                 // Coroutine scope for showing Snackbar and managing batch process
                 val coroutineScope = rememberCoroutineScope()
@@ -629,6 +628,8 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    private fun Clipboard.setText(string: AnnotatedString) {}
 
     // Unregister the receiver and shut down the executors when the activity is destroyed
     override fun onDestroy() {
