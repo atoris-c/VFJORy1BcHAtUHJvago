@@ -26,7 +26,10 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -37,36 +40,45 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import com.google.accompanist.systemuicontroller.rememberSystemUiController
 import com.sknproj.qrng.ui.theme.QRNGTheme
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.suspendCancellableCoroutine
 import java.nio.ByteBuffer
+import java.security.MessageDigest // Import for hashing
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import kotlin.experimental.xor // Import for XOR operation
 
 // Import Material Icons
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CameraAlt
-
+import androidx.compose.material.icons.filled.ContentCopy // Icon for copy
+import kotlin.coroutines.resumeWithException
 
 class MainActivity : ComponentActivity() {
 
     // State variable to hold the current battery temperature
-    private var currentBatteryTemperature by mutableStateOf(0) // Temperature in tenths of a degree Celsius
+    private var currentBatteryTemperature by mutableIntStateOf(0) // Temperature in tenths of a degree Celsius
 
     // State variables for the real-time status indicators
     private var isCameraCovered by mutableStateOf(false)
     private var isTemperatureHigh by mutableStateOf(false)
     private val tempThreshold = 45.0 // Warning threshold in Celsius for display
-    private val cameraCoverLuminanceThreshold = 30.0 // Luminance threshold for real-time camera cover detection
+    // Reduced luminance threshold slightly for potentially better detection in very dark conditions
+    private val cameraCoverLuminanceThreshold = 25.0 // Luminance threshold for real-time camera cover detection
 
-    // Executor for image analysis
+    // Executor for image analysis and processing
     private lateinit var cameraExecutor: ExecutorService
+    private lateinit var processingExecutor: ExecutorService // New executor for heavy processing
 
     // BroadcastReceiver to listen for battery changes
     private val batteryInfoReceiver: BroadcastReceiver = object : BroadcastReceiver() {
@@ -113,14 +125,14 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Initialize the camera executor
+        // Initialize the executors
         cameraExecutor = Executors.newSingleThreadExecutor()
+        processingExecutor = Executors.newSingleThreadExecutor() // Initialize processing executor
 
         // Register the battery info receiver when the activity is created
         val batteryFilter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
         // Use ContextCompat.registerReceiver for better compatibility and handling exported receivers
         ContextCompat.registerReceiver(this, batteryInfoReceiver, batteryFilter, ContextCompat.RECEIVER_NOT_EXPORTED)
-
 
         // Enable drawing behind the system bars
         WindowCompat.setDecorFitsSystemWindows(window, false)
@@ -138,10 +150,6 @@ class MainActivity : ComponentActivity() {
                         color = headerColor,
                         darkIcons = onPrimaryColor != Color.Black // Set dark icons if header color is light
                     )
-                    // You might also want to set the navigation bar color
-                    // systemUiController.setNavigationBarColor(
-                    //     color = MaterialTheme.colorScheme.background // Example: match background color
-                    // )
                 }
 
                 // State variables
@@ -150,17 +158,21 @@ class MainActivity : ComponentActivity() {
                 val showResultDialog = remember { mutableStateOf(false) }
                 val showErrorDialog = remember { mutableStateOf(false) }
                 val errorMessage = remember { mutableStateOf("") }
-                val randomNumber = remember { mutableStateOf<String?>(null) }
-                val isCameraOpened = remember { mutableStateOf(false) } // New state
-                val cameraState = remember { mutableStateOf<Camera?>(null) } // To store Camera instance
-                // showPermissionDialog is now initially true to always show it on startup
+                // randomNumber now stores the full batch of corrected bits
+                val randomBitsBatch = remember { mutableStateOf<String?>(null) }
+                val isCameraOpened = remember { mutableStateOf(false) }
+                val cameraState = remember { mutableStateOf<Camera?>(null) }
                 val showPermissionDialog = remember { mutableStateOf(true) }
-                // hasCameraPermission checks the status on startup
                 val hasCameraPermission = remember { mutableStateOf(ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) }
+
+                // New state variables for batch processing
+                var batchSize by remember { mutableStateOf("10") } // Default batch size
+                var currentBatchProgress by remember { mutableIntStateOf(0) } // Progress counter
+                var totalBatchSize by remember { mutableIntStateOf(0) } // Total images in the batch
+                var batchProcessingStatus by remember { mutableStateOf("") } // Status message for batch
 
                 // New state variable for tracking if the Copy button has been pressed
                 var isCopied by remember { mutableStateOf(false) }
-
 
                 val context = LocalContext.current
                 val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
@@ -171,7 +183,7 @@ class MainActivity : ComponentActivity() {
                 // Get ClipboardManager
                 val clipboardManager = LocalClipboardManager.current
 
-                // Coroutine scope for showing Snackbar
+                // Coroutine scope for showing Snackbar and managing batch process
                 val coroutineScope = rememberCoroutineScope()
                 val snackbarHostState = remember { SnackbarHostState() }
 
@@ -223,9 +235,6 @@ class MainActivity : ComponentActivity() {
 
                 // Always show the permission dialog on launch
                 LaunchedEffect(Unit) {
-                    // The dialog is already initialized to true, so we just need to ensure
-                    // the camera setup happens if permission is already granted.
-                    // The dialog itself will display the status.
                     if (hasCameraPermission.value) {
                         // Proceed with camera setup if permission is already granted
                         cameraProviderFuture.addListener({
@@ -261,49 +270,7 @@ class MainActivity : ComponentActivity() {
                             }
                         }, ContextCompat.getMainExecutor(context))
                     }
-                    // showPermissionDialog is already true, so the dialog will be shown.
                 }
-
-
-                // Set up camera (only if permission is granted and dialog is hidden)
-                // This block is now primarily for initial setup if permission is already granted
-                // The LaunchedEffect handles the case where permission is granted after the dialog/request
-                // We keep this check here as a fallback/alternative trigger for camera setup
-                if (hasCameraPermission.value && cameraState.value == null) {
-                    cameraProviderFuture.addListener({
-                        val cameraProvider = cameraProviderFuture.get()
-                        val preview = Preview.Builder().build().also {
-                            it.surfaceProvider = previewView.surfaceProvider
-                        }
-
-                        // Setup ImageAnalysis for real-time luminance check
-                        val imageAnalyzer = ImageAnalysis.Builder()
-                            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST) // Only analyze the latest frame
-                            .build()
-                            .also {
-                                it.setAnalyzer(cameraExecutor, LuminanceAnalyzer { luminance ->
-                                    // Update the camera covered status based on real-time luminance
-                                    isCameraCovered = luminance < cameraCoverLuminanceThreshold
-                                })
-                            }
-
-                        val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
-
-                        try {
-                            cameraProvider.unbindAll()
-                            // Bind Preview, ImageCapture, and ImageAnalysis
-                            val camera = cameraProvider.bindToLifecycle(
-                                this@MainActivity, cameraSelector, preview, imageCapture, imageAnalyzer
-                            )
-                            cameraState.value = camera // Store the Camera instance
-
-                        } catch (e: Exception) {
-                            errorMessage.value = "Camera binding failed: ${e.message}"
-                            showErrorDialog.value = true
-                        }
-                    }, ContextCompat.getMainExecutor(context))
-                }
-
 
                 // Observe camera state
                 DisposableEffect(cameraState.value) {
@@ -343,7 +310,7 @@ class MainActivity : ComponentActivity() {
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text(
-                            text = "QRNG v0.1",
+                            text = "TRNG v0.2 (Batch Mode)", // Updated version text
                             color = onPrimaryColor,
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold,
@@ -357,9 +324,10 @@ class MainActivity : ComponentActivity() {
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(top = 16.dp) // Add top padding for .content spacing
-                            .padding(horizontal = 16.dp), // Add horizontal padding to content
+                            .padding(horizontal = 16.dp) // Add horizontal padding to content
+                            .verticalScroll(rememberScrollState()), // Make content scrollable
                         horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(8.dp) // Reduced spacing to fit indicators
+                        verticalArrangement = Arrangement.spacedBy(12.dp) // Increased spacing
                     ) {
                         if (hasCameraPermission.value) { // Only show preview if permission is granted
                             AndroidView(
@@ -367,12 +335,11 @@ class MainActivity : ComponentActivity() {
                                 modifier = Modifier
                                     .fillMaxWidth() // Make it fill the width
                                     .aspectRatio(1f) // Add this to make it a 1:1 aspect ratio (square)
-                                    // Removed .fillMaxHeight(0.6f)
                                     .clip(RoundedCornerShape(16.dp)) // Added rounded corners to the camera preview
                             )
                             // Instruction text with padding
                             Text(
-                                "Please cover the camera sensor and press the button to capture.",
+                                "Please cover the camera sensor and press 'Generate Batch' to capture images.",
                                 modifier = Modifier.padding(horizontal = 8.dp) // Added horizontal padding to text
                             )
 
@@ -394,7 +361,6 @@ class MainActivity : ComponentActivity() {
                                 )
                             }
 
-
                             // Temperature Status
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 if (!isTemperatureHigh) { // Show checkmark if temperature is NOT high (i.e., normal)
@@ -413,130 +379,166 @@ class MainActivity : ComponentActivity() {
                             }
                             // --- End Real-time Status Indicators with Icons ---
 
+                            // Batch Size Input
+                            OutlinedTextField(
+                                value = batchSize,
+                                onValueChange = { newValue ->
+                                    // Allow only digits
+                                    batchSize = newValue.filter { it.isDigit() }
+                                },
+                                label = { Text("Batch Size (Number of Images)") },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                modifier = Modifier.fillMaxWidth()
+                            )
 
-                            // Button with enabled state controlled by isCapturing
+                            // Generate Batch Button
                             Button(
                                 onClick = {
+                                    val size = batchSize.toIntOrNull() ?: 0
+                                    if (size <= 0) {
+                                        errorMessage.value = "Please enter a valid batch size (greater than 0)."
+                                        showErrorDialog.value = true
+                                        return@Button
+                                    }
+
                                     if (!isCapturing.value) {
                                         if (isCameraOpened.value) {
                                             isCapturing.value = true
                                             showLoading.value = true
-                                            imageCapture.takePicture(
-                                                ContextCompat.getMainExecutor(context),
-                                                object : ImageCapture.OnImageCapturedCallback() {
-                                                    override fun onCaptureSuccess(image: ImageProxy) {
+                                            totalBatchSize = size
+                                            currentBatchProgress = 0
+                                            batchProcessingStatus = "Starting batch..."
+                                            randomBitsBatch.value = null // Clear previous result
+
+                                            coroutineScope.launch {
+                                                val collectedBits = StringBuilder()
+                                                var batchError: String? = null
+
+                                                // Loop for batch processing
+                                                for (i in 1..totalBatchSize) {
+                                                    currentBatchProgress = i
+                                                    batchProcessingStatus = "Capturing image $i of $totalBatchSize..."
+
+                                                    // Capture image
+                                                    val imageProxy = suspendCancellableCoroutine<ImageProxy?> { continuation ->
+                                                        imageCapture.takePicture(ContextCompat.getMainExecutor(context), object : ImageCapture.OnImageCapturedCallback() {
+                                                            override fun onCaptureSuccess(imageResult: ImageProxy) {
+                                                                // This is where you get the ImageProxy
+                                                                continuation.resume(imageResult) {
+                                                                    // Optional: Handle cancellation if needed
+                                                                    imageResult.close() // Ensure image is closed if coroutine is cancelled
+                                                                }
+                                                            }
+
+                                                            override fun onError(exception: ImageCaptureException) {
+                                                                // Handle the error
+                                                                continuation.resumeWithException(exception)
+                                                            }
+                                                        })
+                                                    }
+
+                                                    // Now, continue processing the 'imageProxy' outside the callback,
+                                                    // but within the coroutine scope, after the suspend call resumes.
+                                                    if (imageProxy != null) {
+                                                        batchProcessingStatus = "Processing image $i of $totalBatchSize..."
                                                         try {
-                                                            println("Image captured")
-                                                            val bitmap = image.toBitmapNullable()
-                                                            image.close() // Close the image proxy
+                                                            // ... rest of your processing logic using imageProxy ...
+                                                            val bitmap = imageProxy.toBitmapNullable()
+                                                            imageProxy.close() // Close the image proxy after converting or processing
 
                                                             if (bitmap != null) {
-                                                                // --- Environmental Checks ---
-                                                                // The real-time analysis updates isCameraCovered,
-                                                                // but we can still perform a final check on the captured image
-                                                                val isDarkOnCapture = isImageDark(bitmap, threshold = 20.0)
-                                                                if (!isDarkOnCapture) {
-                                                                    errorMessage.value = "Please ensure the camera lens is completely covered."
-                                                                    showErrorDialog.value = true
-                                                                    showLoading.value = false
-                                                                    isCapturing.value = false
-                                                                    return // Stop processing if image is not dark
-                                                                }
-
-                                                                // Temperature status is updated by the BroadcastReceiver
-                                                                // isTemperatureHigh state is already updated
-
-                                                                if (isTemperatureHigh) {
-                                                                    errorMessage.value = "Device temperature is high (${currentBatteryTemperature / 10.0}°C). This might increase noise. Consider letting the device cool down."
-                                                                    showErrorDialog.value = true
-                                                                    // We still allow generation, but warn the user
-                                                                }
-                                                                // --- End Environmental Checks ---
-
-                                                                try {
-                                                                    val number = processImage(bitmap)
-                                                                    println("Number: $number")
-                                                                    randomNumber.value = number.toString()
-                                                                    showResultDialog.value = true
-                                                                    showLoading.value = false
-                                                                    // Reset isCopied state when a new number is generated and shown
-                                                                    isCopied = false
-
-                                                                } catch (e: IllegalStateException) {
-                                                                    println("Error: ${e.message}")
-                                                                    errorMessage.value = e.message ?: "An error occurred during processing."
-                                                                    showErrorDialog.value = true
-                                                                    showLoading.value = false
-                                                                }
+                                                                // ... rest of your bitmap processing ...
+                                                                bitmap.recycle() // Recycle bitmap after check or processing
+                                                                // ... append corrected bits ...
                                                             } else {
-                                                                println("Error: Bitmap is null")
-                                                                errorMessage.value = "Bitmap is null"
-                                                                showErrorDialog.value = true
-                                                                showLoading.value = false
+                                                                batchError = "Failed to get bitmap from image $i."
+                                                                break // Stop batch on error
                                                             }
-                                                        } catch (e: Exception){
-                                                            println("Error: ${e.message}")
-                                                            errorMessage.value = e.message ?: "An error occurred during processing."
-                                                            showErrorDialog.value = true
-                                                            showLoading.value = false
-                                                        } finally {
-                                                            isCapturing.value = false // Ensure capturing state is reset
+                                                        } catch (e: Exception) {
+                                                            batchError = "Error processing image $i: ${e.message}"
+                                                            break // Stop batch on error
                                                         }
-
+                                                    } else {
+                                                        batchError = "Image proxy was null for image $i."
+                                                        break // Stop batch on error
                                                     }
+                                                } // End of batch loop
 
-                                                    override fun onError(exception: ImageCaptureException) {
-                                                        println("Image capture error: ${exception.message}")
-                                                        errorMessage.value = "Image capture failed: ${exception.message}"
-                                                        showErrorDialog.value = true
-                                                        showLoading.value = false
-                                                        isCapturing.value = false // Ensure capturing state is reset
-                                                    }
+                                                // Batch processing finished
+                                                showLoading.value = false
+                                                isCapturing.value = false // Ensure capturing state is reset
+
+                                                if (batchError != null) {
+                                                    errorMessage.value = batchError
+                                                    showErrorDialog.value = true
+                                                    batchProcessingStatus = "Batch failed."
+                                                } else {
+                                                    randomBitsBatch.value = collectedBits.toString()
+                                                    batchProcessingStatus = "Batch complete. ${collectedBits.length} corrected bits generated."
+                                                    showResultDialog.value = true // Show dialog with the batch result
+                                                    isCopied = false // Reset copied state
                                                 }
-                                            )
+                                            }
                                         }
                                     }
                                 },
                                 enabled = !isCapturing.value && hasCameraPermission.value // Disable button if capturing or no permission
                             ) {
-                                // Content of the button (Icon and Text)
                                 Icon(
-                                    imageVector = Icons.Default.CameraAlt, // Use CameraAlt icon
-                                    contentDescription = "Generate Number",
-                                    modifier = Modifier.size(20.dp).padding(end = 4.dp) // Adjust size and spacing
+                                    imageVector = Icons.Default.CameraAlt,
+                                    contentDescription = "Generate Batch",
+                                    modifier = Modifier.size(20.dp).padding(end = 4.dp)
                                 )
-                                Text("Generate")
+                                Text("Generate Batch")
                             }
+
+                            // Batch Processing Status
+                            if (showLoading.value) {
+                                Text(batchProcessingStatus)
+                                LinearProgressIndicator(
+                                    progress = if (totalBatchSize > 0) currentBatchProgress.toFloat() / totalBatchSize else 0f,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+
+
+                            // Snackbar host for showing messages
+                            SnackbarHost(hostState = snackbarHostState) { data ->
+                                Snackbar(
+                                    snackbarData = data,
+                                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                                )
+                            }
+
                         } else {
                             // Show a message if permission is not granted
-                            Text("Camera permission is required to use the QRNG feature.")
+                            Text("Camera permission is required to use the TRNG feature.")
                         }
-
-                        // Loading indicator (positioned within the Column, will be centered horizontally)
-                        if (showLoading.value) {
-                            CircularProgressIndicator()
-                        }
-
-                        // Snackbar host for showing messages
-                        SnackbarHost(hostState = snackbarHostState) { data ->
-                            Snackbar(
-                                snackbarData = data,
-                                containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                                contentColor = MaterialTheme.colorScheme.onSecondaryContainer
-                            )
-                        }
-
                     } // End of Main UI Content Column
 
                     // Dialogs remain the same (they are drawn on top of the UI)
-                    if (showResultDialog.value && randomNumber.value != null) {
+                    if (showResultDialog.value && randomBitsBatch.value != null) {
                         AlertDialog(
                             onDismissRequest = {
                                 showResultDialog.value = false
                                 isCopied = false // Reset isCopied when dialog is dismissed
                             },
-                            title = { Text("Generated Number") },
-                            text = { Text(randomNumber.value!!) },
+                            title = { Text("Generated Bitstream") },
+                            text = {
+                                // Display the generated bitstream in a scrollable text
+                                Column {
+                                    Text("Total Corrected Bits: ${randomBitsBatch.value!!.length}")
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text(
+                                        text = randomBitsBatch.value!!,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .heightIn(max = 200.dp) // Limit height and make it scrollable
+                                            .verticalScroll(rememberScrollState())
+                                    )
+                                }
+                            },
                             confirmButton = {
                                 // Use a Row to place multiple buttons
                                 Row(
@@ -546,22 +548,25 @@ class MainActivity : ComponentActivity() {
                                     Button(
                                         onClick = {
                                             // Copy the number to the clipboard
-                                            clipboardManager.setText(AnnotatedString(randomNumber.value!!))
+                                            clipboardManager.setText(AnnotatedString(randomBitsBatch.value!!))
                                             // Set isCopied to true
                                             isCopied = true
                                             // Show a confirmation message
                                             coroutineScope.launch {
                                                 snackbarHostState.showSnackbar(
-                                                    message = "Generated number copied to clipboard",
+                                                    message = "Generated bitstream copied to clipboard",
                                                     duration = SnackbarDuration.Short
                                                 )
                                             }
-                                            // Optionally close the dialog after copying
-                                            // showResultDialog.value = false
                                         },
                                         enabled = !isCopied // Disable button if already copied
                                     ) {
-                                        Text(if (isCopied) "Copied" else "Copy")
+                                        Icon(
+                                            imageVector = Icons.Default.ContentCopy,
+                                            contentDescription = "Copy Bitstream",
+                                            modifier = Modifier.size(20.dp).padding(end = 4.dp)
+                                        )
+                                        Text(if (isCopied) "Copied" else "Copy All")
                                     }
                                     // OK Button
                                     Button(onClick = {
@@ -601,9 +606,8 @@ class MainActivity : ComponentActivity() {
                             text = {
                                 // Display the current status
                                 if (hasCameraPermission.value) {
-                                    Text("Camera permission has been granted. You can now use the QRNG feature.")
+                                    Text("Camera permission has been granted. You can now use the TRNG feature.")
                                 } else {
-                                    // Corrected the typo here
                                     Text("Camera permission is required to use this feature. Please grant the permission when prompted.")
                                 }
                             },
@@ -626,11 +630,12 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // Unregister the receiver and shut down the executor when the activity is destroyed
+    // Unregister the receiver and shut down the executors when the activity is destroyed
     override fun onDestroy() {
         super.onDestroy()
         unregisterReceiver(batteryInfoReceiver)
-        cameraExecutor.shutdown() // Shut down the executor
+        cameraExecutor.shutdown() // Shut down the camera executor
+        processingExecutor.shutdown() // Shut down the processing executor
     }
 
     // Helper function to check if the image is predominantly dark (lens covered)
@@ -660,16 +665,21 @@ class MainActivity : ComponentActivity() {
         return averageLuminance < threshold
     }
 
-
-    // Helper functions remain unchanged
+    // Helper function to convert ImageProxy to Bitmap (can return null)
     fun ImageProxy.toBitmapNullable(): Bitmap? {
-        val buffer = planes[0].buffer
-        buffer.rewind()
-        val bytes = ByteArray(buffer.remaining()) // Use remaining() instead of capacity()
-        buffer.get(bytes)
-        return BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+        try {
+            val buffer = planes[0].buffer
+            buffer.rewind()
+            val bytes = ByteArray(buffer.remaining())
+            buffer.get(bytes)
+            return BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+        } catch (e: Exception) {
+            println("Error converting ImageProxy to Bitmap: ${e.message}")
+            return null
+        }
     }
 
+    // Von Neumann Corrector function - remains the same
     fun vonNeumannCorrector(bits: String): String {
         val correctedBits = StringBuilder()
         for (i in 0 until bits.length - 1 step 2) {
@@ -683,7 +693,8 @@ class MainActivity : ComponentActivity() {
         return correctedBits.toString()
     }
 
-    fun processImage(bitmap: Bitmap): Int {
+    // Modified processImage function to return Von Neumann corrected bits string
+    fun processImageForCorrectedBits(bitmap: Bitmap): String {
         val width = bitmap.width
         val height = bitmap.height
         val pixels = IntArray(width * height)
@@ -697,21 +708,29 @@ class MainActivity : ComponentActivity() {
             val lsbRed = red and 1
             val lsbGreen = green and 1
             val lsbBlue = blue and 1
+            // Use Kotlin's xor extension function for clarity
             val randomBit = lsbRed xor lsbGreen xor lsbBlue
             randomBits.append(randomBit)
         }
 
         val rawBits = randomBits.toString()
-        var whitenedBits = vonNeumannCorrector(rawBits)
-
-        // If not enough bits, process more data or retry
-        if (whitenedBits.length < 32) {
-            // For simplicity, pad with zeros or retry; in practice, gather more bits
-            throw IllegalStateException("Only ${whitenedBits.length} bits after whitening, need 32")
-            // Alternative: while (whitenedBits.length < 32) whitenedBits += "0"
-        } else {
-            val selectedBits = whitenedBits.substring(0, 32)
-            return selectedBits.toUInt(2).toInt()
-        }
+        // Return the Von Neumann corrected bits
+        return vonNeumannCorrector(rawBits)
     }
+
+    // You can add a function here later for hash-based whitening if needed
+    /*
+    fun applySha256Whitening(bits: String): String {
+        // Convert bit string to byte array (this requires careful handling of bit packing)
+        // A simpler approach might be to hash a byte representation of the image data directly
+        // or hash a large block of the collected Von Neumann bits.
+        // For now, we'll leave this as a placeholder.
+        // Example (conceptual, needs proper bit-to-byte conversion):
+        // val bytes = convertBitsToBytes(bits)
+        // val digest = MessageDigest.getInstance("SHA-256")
+        // val hashBytes = digest.digest(bytes)
+        // return hashBytes.joinToString("") { "%02x".format(it) } // Return as hex string
+        return "Hashing not implemented yet" // Placeholder
+    }
+    */
 }
