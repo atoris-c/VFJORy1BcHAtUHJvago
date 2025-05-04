@@ -8,8 +8,10 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.net.Uri // Import Uri
 import android.os.BatteryManager
 import android.os.Bundle
+import android.os.Environment
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -47,10 +49,18 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import com.google.accompanist.systemuicontroller.rememberSystemUiController
 import com.sknproj.qrng.ui.theme.QRNGTheme
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.FileOutputStream
+import java.io.OutputStream // Import OutputStream
 import java.nio.ByteBuffer
 import java.security.MessageDigest // Import for hashing
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import kotlin.experimental.xor // Import for XOR operation
@@ -60,8 +70,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.ContentCopy // Icon for copy
+import androidx.compose.material.icons.filled.Save // Icon for save
 import androidx.compose.ui.platform.Clipboard
-import androidx.compose.ui.platform.LocalClipboard
+// No longer need LocalClipboard, using LocalClipboardManager
+// import androidx.compose.ui.platform.LocalClipboard
 import kotlin.coroutines.resumeWithException
 
 class MainActivity : ComponentActivity() {
@@ -79,6 +91,9 @@ class MainActivity : ComponentActivity() {
     // Executor for image analysis and processing
     private lateinit var cameraExecutor: ExecutorService
     private lateinit var processingExecutor: ExecutorService // New executor for heavy processing
+
+    // Variable to hold the large bitstream when in Advanced Mode (NOT a Compose State)
+    private var testDataBitstream: String? = null
 
     // BroadcastReceiver to listen for battery changes
     private val batteryInfoReceiver: BroadcastReceiver = object : BroadcastReceiver() {
@@ -157,13 +172,14 @@ class MainActivity : ComponentActivity() {
                 val showLoading = remember { mutableStateOf(false) }
                 val showResultDialog = remember { mutableStateOf(false) }
                 val showErrorDialog = remember { mutableStateOf(false) }
-                val errorMessage = remember { mutableStateOf("") }
-                // randomNumber now stores the full batch of corrected bits or the final hashed output
-                val randomOutput = remember { mutableStateOf<String?>(null) } // Changed name for clarity
+                val errorMessage = remember { mutableStateOf("") } // Declared here
+                // randomOutput now stores the final hashed output OR a summary string for test data
+                val randomOutput = remember { mutableStateOf<String?>(null) } // Single string output for display
                 val isCameraOpened = remember { mutableStateOf(false) }
                 val cameraState = remember { mutableStateOf<Camera?>(null) }
                 val showPermissionDialog = remember { mutableStateOf(true) }
                 val hasCameraPermission = remember { mutableStateOf(ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) }
+                // Removed hasStoragePermission as it's no longer needed for SAF
 
                 // New state variables for batch processing
                 var batchSize by remember { mutableStateOf("10") } // Default batch size
@@ -174,58 +190,31 @@ class MainActivity : ComponentActivity() {
                 // New state variable for tracking if the Copy button has been pressed
                 var isCopied by remember { mutableStateOf(false) }
 
+                // State variable for Advanced Mode (Test Data Generation)
+                var isAdvancedMode by remember { mutableStateOf(false) }
+
                 val context = LocalContext.current
                 val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
                 val previewView = remember { PreviewView(context) }
                 val imageCapture = remember { ImageCapture.Builder().build() }
                 val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
 
-                // Get ClipboardManager
+                // Get ClipboardManager using LocalClipboardManager.current
                 val clipboardManager = LocalClipboardManager.current
 
                 // Coroutine scope for showing Snackbar and managing batch process
                 val coroutineScope = rememberCoroutineScope()
                 val snackbarHostState = remember { SnackbarHostState() }
 
-                // Permission request launcher
-                val permissionLauncher = rememberLauncherForActivityResult(
+                // Permission request launcher for Camera
+                val cameraPermissionLauncher = rememberLauncherForActivityResult(
                     contract = ActivityResultContracts.RequestPermission()
                 ) { isGranted: Boolean ->
                     hasCameraPermission.value = isGranted // Update permission status
                     if (isGranted) {
                         // If permission is granted after request, proceed with camera setup
-                        cameraProviderFuture.addListener({
-                            val cameraProvider = cameraProviderFuture.get()
-                            val preview = Preview.Builder().build().also {
-                                it.surfaceProvider = previewView.surfaceProvider
-                            }
-
-                            // Setup ImageAnalysis for real-time luminance check
-                            val imageAnalyzer = ImageAnalysis.Builder()
-                                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST) // Only analyze the latest frame
-                                .build()
-                                .also {
-                                    it.setAnalyzer(cameraExecutor, LuminanceAnalyzer { luminance ->
-                                        // Update the camera covered status based on real-time luminance
-                                        isCameraCovered = luminance < cameraCoverLuminanceThreshold
-                                    })
-                                }
-
-                            val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
-
-                            try {
-                                cameraProvider.unbindAll()
-                                // Bind Preview, ImageCapture, and ImageAnalysis
-                                val camera = cameraProvider.bindToLifecycle(
-                                    this@MainActivity, cameraSelector, preview, imageCapture, imageAnalyzer
-                                )
-                                cameraState.value = camera // Store the Camera instance
-
-                            } catch (e: Exception) {
-                                errorMessage.value = "Camera binding failed: ${e.message}"
-                                showErrorDialog.value = true
-                            }
-                        }, ContextCompat.getMainExecutor(context))
+                        // Pass the state variables to setupCamera
+                        setupCamera(context, cameraProviderFuture, previewView, imageCapture, cameraExecutor, lifecycleOwner, cameraState, errorMessage, showErrorDialog)
                     } else {
                         // If permission is denied after request
                         errorMessage.value = "Camera permission is required to use this feature."
@@ -233,43 +222,37 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                // Always show the permission dialog on launch
-                LaunchedEffect(Unit) {
-                    if (hasCameraPermission.value) {
-                        // Proceed with camera setup if permission is already granted
-                        cameraProviderFuture.addListener({
-                            val cameraProvider = cameraProviderFuture.get()
-                            val preview = Preview.Builder().build().also {
-                                it.surfaceProvider = previewView.surfaceProvider
-                            }
-
-                            // Setup ImageAnalysis for real-time luminance check
-                            val imageAnalyzer = ImageAnalysis.Builder()
-                                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST) // Only analyze the latest frame
-                                .build()
-                                .also {
-                                    it.setAnalyzer(cameraExecutor, LuminanceAnalyzer { luminance ->
-                                        // Update the camera covered status based on real-time luminance
-                                        isCameraCovered = luminance < cameraCoverLuminanceThreshold
-                                    })
-                                }
-
-                            val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
-
-                            try {
-                                cameraProvider.unbindAll()
-                                // Bind Preview, ImageCapture, and ImageAnalysis
-                                val camera = cameraProvider.bindToLifecycle(
-                                    this@MainActivity, cameraSelector, preview, imageCapture, imageAnalyzer
-                                )
-                                cameraState.value = camera // Store the Camera instance
-
-                            } catch (e: Exception) {
-                                errorMessage.value = "Camera binding failed: ${e.message}"
-                                showErrorDialog.value = true
-                            }
-                        }, ContextCompat.getMainExecutor(context))
+                // Activity result launcher for creating a document (saving file)
+                val createDocumentLauncher = rememberLauncherForActivityResult(
+                    contract = ActivityResultContracts.CreateDocument("text/plain") // Specify MIME type for text files
+                ) { uri: Uri? ->
+                    // Handle the result URI here
+                    if (uri != null) {
+                        // User selected a location, now write the data to the URI
+                        coroutineScope.launch {
+                            val success = writeDataToUri(context, uri, testDataBitstream)
+                            val message = if (success) "Test data saved successfully!" else "Failed to save test data."
+                            snackbarHostState.showSnackbar(message, duration = SnackbarDuration.Short)
+                        }
+                    } else {
+                        // User cancelled the file picker
+                        coroutineScope.launch {
+                            snackbarHostState.showSnackbar("File save cancelled.", duration = SnackbarDuration.Short)
+                        }
                     }
+                }
+
+
+                // Request camera permission on launch
+                LaunchedEffect(Unit) {
+                    if (!hasCameraPermission.value) {
+                        cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                    } else {
+                        // Setup camera if permission is already granted
+                        // Pass the state variables to setupCamera
+                        setupCamera(context, cameraProviderFuture, previewView, imageCapture, cameraExecutor, lifecycleOwner, cameraState, errorMessage, showErrorDialog)
+                    }
+                    // No need to request WRITE_EXTERNAL_STORAGE permission anymore
                 }
 
                 // Observe camera state
@@ -310,7 +293,7 @@ class MainActivity : ComponentActivity() {
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text(
-                            text = "TRNG v0.3 (SHA-256 Whitening)", // Updated version text
+                            text = "TRNG v0.8", // Updated version text
                             color = onPrimaryColor,
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold,
@@ -329,7 +312,7 @@ class MainActivity : ComponentActivity() {
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(12.dp) // Increased spacing
                     ) {
-                        if (hasCameraPermission.value) { // Only show preview if permission is granted
+                        if (hasCameraPermission.value) { // Only show preview if camera permission is granted
                             AndroidView(
                                 factory = { previewView },
                                 modifier = Modifier
@@ -355,7 +338,7 @@ class MainActivity : ComponentActivity() {
                                     )
                                 }
                                 Text(
-                                    text = if (isCameraCovered) "Camera Covered: Yes" else "Camera Covered: No (Cover the lens!)",
+                                    text = if (isCameraCovered) "Camera is covered!" else "Please cover the camera lens!",
                                     color = if (isCameraCovered) Color.Green else Color.Red,
                                     style = MaterialTheme.typography.bodyMedium
                                 )
@@ -391,6 +374,25 @@ class MainActivity : ComponentActivity() {
                                 modifier = Modifier.fillMaxWidth()
                             )
 
+                            // Advanced Mode Toggle
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text("Advanced Mode (Generate Test Data)")
+                                Switch(
+                                    checked = isAdvancedMode,
+                                    onCheckedChange = {
+                                        isAdvancedMode = it
+                                        // Clear previous result when toggling mode
+                                        randomOutput.value = null
+                                        testDataBitstream = null // Also clear the stored test data
+                                    }
+                                )
+                            }
+
+
                             // Generate Batch Button
                             Button(
                                 onClick = {
@@ -400,6 +402,8 @@ class MainActivity : ComponentActivity() {
                                         showErrorDialog.value = true
                                         return@Button
                                     }
+                                    // No need to check for storage permission here anymore
+
 
                                     if (!isCapturing.value) {
                                         if (isCameraOpened.value) {
@@ -409,6 +413,7 @@ class MainActivity : ComponentActivity() {
                                             currentBatchProgress = 0
                                             batchProcessingStatus = "Starting batch..."
                                             randomOutput.value = null // Clear previous result
+                                            testDataBitstream = null // Clear previous test data
 
                                             coroutineScope.launch {
                                                 val collectedBits = StringBuilder()
@@ -494,26 +499,37 @@ class MainActivity : ComponentActivity() {
                                                     showErrorDialog.value = true
                                                     batchProcessingStatus = "Batch failed."
                                                 } else {
-                                                    batchProcessingStatus = "Batch complete. Applying SHA-256 whitening..."
-                                                    // Apply SHA-256 whitening to the collected bits
-                                                    val finalHashedOutput = applySha256Whitening(collectedBits.toString())
-                                                    randomOutput.value = finalHashedOutput // Store the final hashed output
-                                                    batchProcessingStatus = "Whitening complete. Generated ${finalHashedOutput.length * 4} bits (Hexadecimal)." // SHA-256 is 256 bits = 64 hex chars
-                                                    showResultDialog.value = true // Show dialog with the final result
+                                                    // --- Conditional Output based on Advanced Mode ---
+                                                    if (isAdvancedMode) {
+                                                        // Advanced Mode: Store the full concatenated Von Neumann bitstream
+                                                        testDataBitstream = collectedBits.toString()
+                                                        // Update UI state with a summary message
+                                                        randomOutput.value = "Test data generated: ${testDataBitstream?.length ?: 0} bits."
+                                                        batchProcessingStatus = "Batch complete. Test data ready."
+                                                    } else {
+                                                        // Normal Mode: Apply SHA-256 whitening and output the hash
+                                                        batchProcessingStatus = "Batch complete. Applying SHA-256 whitening..."
+                                                        val finalHashedOutput = applySha256Whitening(collectedBits.toString())
+                                                        randomOutput.value = finalHashedOutput // Store the final hashed output
+                                                        batchProcessingStatus = "Whitening complete. Generated ${finalHashedOutput.length * 4} bits (Hexadecimal)." // SHA-256 is 256 bits = 64 hex chars
+                                                        testDataBitstream = null // Clear test data if not in advanced mode
+                                                    }
+                                                    // --- End Conditional Output ---
+                                                    showResultDialog.value = true // Show dialog with the result
                                                     isCopied = false // Reset copied state
                                                 }
                                             }
                                         }
                                     }
                                 },
-                                enabled = !isCapturing.value && hasCameraPermission.value // Disable button if capturing or no permission
+                                enabled = !isCapturing.value && hasCameraPermission.value // Button enabled state simplified
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.CameraAlt,
                                     contentDescription = "Generate Batch",
                                     modifier = Modifier.size(20.dp).padding(end = 4.dp)
                                 )
-                                Text("Generate Batch")
+                                Text("Generate Batch") // Button text remains "Generate Batch"
                             }
 
                             // Batch Processing Status
@@ -536,7 +552,7 @@ class MainActivity : ComponentActivity() {
                             }
 
                         } else {
-                            // Show a message if permission is not granted
+                            // Show a message if camera permission is not granted
                             Text("Camera permission is required to use the TRNG feature.")
                         }
                     } // End of Main UI Content Column
@@ -548,20 +564,33 @@ class MainActivity : ComponentActivity() {
                                 showResultDialog.value = false
                                 isCopied = false // Reset isCopied when dialog is dismissed
                             },
-                            title = { Text("Generated Random Output (SHA-256)") }, // Updated title
+                            // --- Conditional Title based on Advanced Mode ---
+                            title = {
+                                Text(if (isAdvancedMode) "Generated Test Data Summary" else "Generated Random Output (SHA-256)")
+                            },
+                            // --- End Conditional Title ---
                             text = {
                                 // Display the generated output in a scrollable text
                                 Column {
-                                    // Display length in bits (SHA-256 is 256 bits)
-                                    Text("Generated Bits: ${randomOutput.value!!.length * 4}") // Hex string length * 4 bits/hex char
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    Text(
-                                        text = randomOutput.value!!, // Display the hex string
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .heightIn(max = 200.dp) // Limit height and make it scrollable
-                                            .verticalScroll(rememberScrollState())
-                                    )
+                                    // --- Conditional Content Display ---
+                                    if (isAdvancedMode) {
+                                        // In Advanced Mode, display the summary from randomOutput state
+                                        Text(randomOutput.value!!)
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Text("Tap 'Save to File' to export the full bitstream.")
+                                    } else {
+                                        // In Normal Mode, display the SHA-256 hash
+                                        Text("Generated Bits: ${randomOutput.value!!.length * 4} (Hexadecimal)") // SHA-256 is 256 bits = 64 hex chars
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Text(
+                                            text = randomOutput.value!!, // Display the hex string output
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .heightIn(max = 200.dp) // Limit height and make it scrollable
+                                                .verticalScroll(rememberScrollState())
+                                        )
+                                    }
+                                    // --- End Conditional Content Display ---
                                 }
                             },
                             confirmButton = {
@@ -569,31 +598,53 @@ class MainActivity : ComponentActivity() {
                                 Row(
                                     horizontalArrangement = Arrangement.spacedBy(8.dp) // Add spacing between buttons
                                 ) {
-                                    // Copy Button
-                                    Button(
-                                        onClick = {
-                                            // Copy the output to the clipboard
-                                            clipboardManager.setText(AnnotatedString(randomOutput.value!!))
-                                            // Set isCopied to true
-                                            isCopied = true
-                                            // Show a confirmation message
-                                            coroutineScope.launch {
-                                                snackbarHostState.showSnackbar(
-                                                    message = "Generated output copied to clipboard",
-                                                    duration = SnackbarDuration.Short
-                                                )
-                                            }
-                                        },
-                                        enabled = !isCopied // Disable button if already copied
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.ContentCopy,
-                                            contentDescription = "Copy Output",
-                                            modifier = Modifier.size(20.dp).padding(end = 4.dp)
-                                        )
-                                        Text(if (isCopied) "Copied" else "Copy Output")
+                                    // Conditional Button based on Advanced Mode
+                                    if (isAdvancedMode) {
+                                        // Save to File Button for Advanced Mode
+                                        Button(
+                                            onClick = {
+                                                // Launch the file creation intent
+                                                val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+                                                val filename = "TRNG_TestData_$timestamp.txt"
+                                                createDocumentLauncher.launch(filename) // Launch the SAF document creator
+                                            },
+                                            enabled = testDataBitstream != null // Enable only if test data exists
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Save,
+                                                contentDescription = "Save to File",
+                                                modifier = Modifier.size(20.dp).padding(end = 4.dp)
+                                            )
+                                            Text("Save to File")
+                                        }
+                                    } else {
+                                        // Copy Button for Normal Mode
+                                        Button(
+                                            onClick = {
+                                                // Copy the output to the clipboard
+                                                val textToCopy = randomOutput.value!!
+                                                clipboardManager.setText(AnnotatedString(textToCopy))
+                                                // Set isCopied to true
+                                                isCopied = true
+                                                // Show a confirmation message
+                                                coroutineScope.launch {
+                                                    snackbarHostState.showSnackbar(
+                                                        message = "Generated random output copied to clipboard",
+                                                        duration = SnackbarDuration.Short
+                                                    )
+                                                }
+                                            },
+                                            enabled = !isCopied && randomOutput.value != null // Disable if copied or no data
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.ContentCopy,
+                                                contentDescription = "Copy Output",
+                                                modifier = Modifier.size(20.dp).padding(end = 4.dp)
+                                            )
+                                            Text(if (isCopied) "Copied" else "Copy Output") // Button text remains "Copy Output"
+                                        }
                                     }
-                                    // OK Button
+                                    // OK Button (remains the same)
                                     Button(onClick = {
                                         showResultDialog.value = false
                                         isCopied = false // Reset isCopied when dialog is dismissed
@@ -622,35 +673,102 @@ class MainActivity : ComponentActivity() {
                         AlertDialog(
                             onDismissRequest = {
                                 showPermissionDialog.value = false
-                                // Only request permission if it's not already granted
+                                // Only request permission if not already granted
                                 if (!hasCameraPermission.value) {
-                                    permissionLauncher.launch(Manifest.permission.CAMERA)
+                                    cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
                                 }
+                                // No need to request WRITE_EXTERNAL_STORAGE permission anymore
                             },
-                            title = { Text("Camera Permission Status") }, // Updated title
+                            title = { Text("App Permissions") }, // Updated title
                             text = {
-                                // Display the current status
-                                if (hasCameraPermission.value) {
-                                    Text("Camera permission has been granted. You can now use the TRNG feature.")
-                                } else {
-                                    Text("Camera permission is required to use this feature. Please grant the permission when prompted.")
+                                // Display the current status for camera permission
+                                Column {
+                                    Text("Camera permission status: ${if (hasCameraPermission.value) "Granted" else "Denied"}")
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text("Camera permission is required to use the TRNG feature.")
+                                    Text("Saving test data in Advanced Mode will open a file picker to choose where to save.")
                                 }
                             },
                             confirmButton = {
                                 Button(onClick = {
                                     showPermissionDialog.value = false
-                                    // Only request permission if it's not already granted
+                                    // Request camera permission if not granted
                                     if (!hasCameraPermission.value) {
-                                        permissionLauncher.launch(Manifest.permission.CAMERA)
+                                        cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
                                     }
                                 }) {
-                                    // Button text can be "OK" regardless of status
                                     Text("OK")
                                 }
                             }
                         )
                     }
                 } // End of Overall layout container
+            }
+        }
+    }
+
+    // Helper function to set up the camera
+    private fun setupCamera(
+        context: Context,
+        cameraProviderFuture: com.google.common.util.concurrent.ListenableFuture<ProcessCameraProvider>,
+        previewView: PreviewView,
+        imageCapture: ImageCapture,
+        cameraExecutor: ExecutorService,
+        lifecycleOwner: androidx.lifecycle.LifecycleOwner,
+        cameraState: MutableState<Camera?>,
+        // Pass state variables here
+        errorMessage: MutableState<String>,
+        showErrorDialog: MutableState<Boolean>
+    ) {
+        cameraProviderFuture.addListener({
+            val cameraProvider = cameraProviderFuture.get()
+            val preview = Preview.Builder().build().also {
+                it.surfaceProvider = previewView.surfaceProvider
+            }
+
+            // Setup ImageAnalysis for real-time luminance check
+            val imageAnalyzer = ImageAnalysis.Builder()
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST) // Only analyze the latest frame
+                .build()
+                .also {
+                    it.setAnalyzer(cameraExecutor, LuminanceAnalyzer { luminance ->
+                        // Update the camera covered status based on real-time luminance
+                        isCameraCovered = luminance < cameraCoverLuminanceThreshold
+                    })
+                }
+
+            val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
+
+            try {
+                cameraProvider.unbindAll()
+                // Bind Preview, ImageCapture, and ImageAnalysis
+                val camera = cameraProvider.bindToLifecycle(
+                    lifecycleOwner, cameraSelector, preview, imageCapture, imageAnalyzer
+                )
+                cameraState.value = camera // Store the Camera instance
+
+            } catch (e: Exception) {
+                // Use the passed state variables to update the error message and show the dialog
+                errorMessage.value = "Camera binding failed: ${e.message}"
+                showErrorDialog.value = true
+            }
+        }, ContextCompat.getMainExecutor(context))
+    }
+
+
+    // Helper function to write data to a given Uri using SAF
+    private suspend fun writeDataToUri(context: Context, uri: Uri, data: String?): Boolean {
+        if (data == null) return false
+
+        return withContext(Dispatchers.IO) {
+            try {
+                context.contentResolver.openOutputStream(uri)?.use { outputStream ->
+                    outputStream.write(data.toByteArray())
+                }
+                true // Indicate success
+            } catch (e: Exception) {
+                println("Error writing data to Uri: ${e.message}")
+                false // Indicate failure
             }
         }
     }
