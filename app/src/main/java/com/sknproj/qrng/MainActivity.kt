@@ -42,6 +42,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import com.google.accompanist.systemuicontroller.rememberSystemUiController
@@ -157,8 +158,8 @@ class MainActivity : ComponentActivity() {
                 val showResultDialog = remember { mutableStateOf(false) }
                 val showErrorDialog = remember { mutableStateOf(false) }
                 val errorMessage = remember { mutableStateOf("") }
-                // randomNumber now stores the full batch of corrected bits
-                val randomBitsBatch = remember { mutableStateOf<String?>(null) }
+                // randomNumber now stores the full batch of corrected bits or the final hashed output
+                val randomOutput = remember { mutableStateOf<String?>(null) } // Changed name for clarity
                 val isCameraOpened = remember { mutableStateOf(false) }
                 val cameraState = remember { mutableStateOf<Camera?>(null) }
                 val showPermissionDialog = remember { mutableStateOf(true) }
@@ -180,7 +181,7 @@ class MainActivity : ComponentActivity() {
                 val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
 
                 // Get ClipboardManager
-                val clipboardManager = LocalClipboard.current
+                val clipboardManager = LocalClipboardManager.current
 
                 // Coroutine scope for showing Snackbar and managing batch process
                 val coroutineScope = rememberCoroutineScope()
@@ -309,7 +310,7 @@ class MainActivity : ComponentActivity() {
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text(
-                            text = "TRNG v0.2 (Batch Mode)", // Updated version text
+                            text = "TRNG v0.3 (SHA-256 Whitening)", // Updated version text
                             color = onPrimaryColor,
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold,
@@ -407,7 +408,7 @@ class MainActivity : ComponentActivity() {
                                             totalBatchSize = size
                                             currentBatchProgress = 0
                                             batchProcessingStatus = "Starting batch..."
-                                            randomBitsBatch.value = null // Clear previous result
+                                            randomOutput.value = null // Clear previous result
 
                                             coroutineScope.launch {
                                                 val collectedBits = StringBuilder()
@@ -418,37 +419,58 @@ class MainActivity : ComponentActivity() {
                                                     currentBatchProgress = i
                                                     batchProcessingStatus = "Capturing image $i of $totalBatchSize..."
 
-                                                    // Capture image
-                                                    val imageProxy = suspendCancellableCoroutine<ImageProxy?> { continuation ->
-                                                        imageCapture.takePicture(ContextCompat.getMainExecutor(context), object : ImageCapture.OnImageCapturedCallback() {
-                                                            override fun onCaptureSuccess(imageResult: ImageProxy) {
-                                                                // This is where you get the ImageProxy
-                                                                continuation.resume(imageResult) {
-                                                                    // Optional: Handle cancellation if needed
-                                                                    imageResult.close() // Ensure image is closed if coroutine is cancelled
+                                                    // Capture image using suspendCancellableCoroutine
+                                                    val imageProxy = try {
+                                                        suspendCancellableCoroutine<ImageProxy?> { continuation ->
+                                                            imageCapture.takePicture(ContextCompat.getMainExecutor(context), object : ImageCapture.OnImageCapturedCallback() {
+                                                                override fun onCaptureSuccess(imageResult: ImageProxy) {
+                                                                    continuation.resume(imageResult) {
+                                                                        imageResult.close() // Ensure image is closed if coroutine is cancelled
+                                                                    }
                                                                 }
-                                                            }
 
-                                                            override fun onError(exception: ImageCaptureException) {
-                                                                // Handle the error
-                                                                continuation.resumeWithException(exception)
-                                                            }
-                                                        })
+                                                                override fun onError(exception: ImageCaptureException) {
+                                                                    continuation.resumeWithException(exception)
+                                                                }
+                                                            })
+                                                        }
+                                                    } catch (e: ImageCaptureException) {
+                                                        batchError = "Image capture failed for image $i: ${e.message}"
+                                                        break // Stop batch on error
+                                                    } catch (e: Exception) {
+                                                        batchError = "Unexpected error during image capture for image $i: ${e.message}"
+                                                        break // Stop batch on error
                                                     }
 
-                                                    // Now, continue processing the 'imageProxy' outside the callback,
-                                                    // but within the coroutine scope, after the suspend call resumes.
+                                                    // Now, continue processing the 'imageProxy' after the suspend call resumes.
                                                     if (imageProxy != null) {
                                                         batchProcessingStatus = "Processing image $i of $totalBatchSize..."
                                                         try {
-                                                            // ... rest of your processing logic using imageProxy ...
                                                             val bitmap = imageProxy.toBitmapNullable()
                                                             imageProxy.close() // Close the image proxy after converting or processing
 
                                                             if (bitmap != null) {
-                                                                // ... rest of your bitmap processing ...
-                                                                bitmap.recycle() // Recycle bitmap after check or processing
-                                                                // ... append corrected bits ...
+                                                                // --- Environmental Checks on Captured Image ---
+                                                                val isDarkOnCapture = isImageDark(bitmap, threshold = 20.0)
+                                                                if (!isDarkOnCapture) {
+                                                                    batchError = "Image $i is not dark. Please ensure the camera lens is completely covered."
+                                                                    bitmap.recycle() // Recycle bitmap if not dark and stopping
+                                                                    break // Stop batch if image is not dark
+                                                                }
+
+                                                                // Temperature status is already updated by the BroadcastReceiver
+                                                                if (isTemperatureHigh) {
+                                                                    // Optionally log a warning for high temp during batch
+                                                                    println("Warning: High temperature (${currentBatteryTemperature / 10.0}°C) during image $i.")
+                                                                }
+                                                                // --- End Environmental Checks ---
+
+                                                                // Process the image to get Von Neumann corrected bits
+                                                                val correctedBits = processImageForCorrectedBits(bitmap)
+                                                                collectedBits.append(correctedBits)
+
+                                                                bitmap.recycle() // Recycle bitmap AFTER processing
+
                                                             } else {
                                                                 batchError = "Failed to get bitmap from image $i."
                                                                 break // Stop batch on error
@@ -472,9 +494,12 @@ class MainActivity : ComponentActivity() {
                                                     showErrorDialog.value = true
                                                     batchProcessingStatus = "Batch failed."
                                                 } else {
-                                                    randomBitsBatch.value = collectedBits.toString()
-                                                    batchProcessingStatus = "Batch complete. ${collectedBits.length} corrected bits generated."
-                                                    showResultDialog.value = true // Show dialog with the batch result
+                                                    batchProcessingStatus = "Batch complete. Applying SHA-256 whitening..."
+                                                    // Apply SHA-256 whitening to the collected bits
+                                                    val finalHashedOutput = applySha256Whitening(collectedBits.toString())
+                                                    randomOutput.value = finalHashedOutput // Store the final hashed output
+                                                    batchProcessingStatus = "Whitening complete. Generated ${finalHashedOutput.length * 4} bits (Hexadecimal)." // SHA-256 is 256 bits = 64 hex chars
+                                                    showResultDialog.value = true // Show dialog with the final result
                                                     isCopied = false // Reset copied state
                                                 }
                                             }
@@ -517,20 +542,21 @@ class MainActivity : ComponentActivity() {
                     } // End of Main UI Content Column
 
                     // Dialogs remain the same (they are drawn on top of the UI)
-                    if (showResultDialog.value && randomBitsBatch.value != null) {
+                    if (showResultDialog.value && randomOutput.value != null) {
                         AlertDialog(
                             onDismissRequest = {
                                 showResultDialog.value = false
                                 isCopied = false // Reset isCopied when dialog is dismissed
                             },
-                            title = { Text("Generated Bitstream") },
+                            title = { Text("Generated Random Output (SHA-256)") }, // Updated title
                             text = {
-                                // Display the generated bitstream in a scrollable text
+                                // Display the generated output in a scrollable text
                                 Column {
-                                    Text("Total Corrected Bits: ${randomBitsBatch.value!!.length}")
+                                    // Display length in bits (SHA-256 is 256 bits)
+                                    Text("Generated Bits: ${randomOutput.value!!.length * 4}") // Hex string length * 4 bits/hex char
                                     Spacer(modifier = Modifier.height(8.dp))
                                     Text(
-                                        text = randomBitsBatch.value!!,
+                                        text = randomOutput.value!!, // Display the hex string
                                         modifier = Modifier
                                             .fillMaxWidth()
                                             .heightIn(max = 200.dp) // Limit height and make it scrollable
@@ -546,14 +572,14 @@ class MainActivity : ComponentActivity() {
                                     // Copy Button
                                     Button(
                                         onClick = {
-                                            // Copy the number to the clipboard
-                                            clipboardManager.setText(AnnotatedString(randomBitsBatch.value!!))
+                                            // Copy the output to the clipboard
+                                            clipboardManager.setText(AnnotatedString(randomOutput.value!!))
                                             // Set isCopied to true
                                             isCopied = true
                                             // Show a confirmation message
                                             coroutineScope.launch {
                                                 snackbarHostState.showSnackbar(
-                                                    message = "Generated bitstream copied to clipboard",
+                                                    message = "Generated output copied to clipboard",
                                                     duration = SnackbarDuration.Short
                                                 )
                                             }
@@ -562,10 +588,10 @@ class MainActivity : ComponentActivity() {
                                     ) {
                                         Icon(
                                             imageVector = Icons.Default.ContentCopy,
-                                            contentDescription = "Copy Bitstream",
+                                            contentDescription = "Copy Output",
                                             modifier = Modifier.size(20.dp).padding(end = 4.dp)
                                         )
-                                        Text(if (isCopied) "Copied" else "Copy All")
+                                        Text(if (isCopied) "Copied" else "Copy Output")
                                     }
                                     // OK Button
                                     Button(onClick = {
@@ -629,7 +655,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun Clipboard.setText(string: AnnotatedString) {}
 
     // Unregister the receiver and shut down the executors when the activity is destroyed
     override fun onDestroy() {
@@ -719,19 +744,24 @@ class MainActivity : ComponentActivity() {
         return vonNeumannCorrector(rawBits)
     }
 
-    // You can add a function here later for hash-based whitening if needed
-    /*
+    // Function to apply SHA-256 whitening to a bitstring
     fun applySha256Whitening(bits: String): String {
-        // Convert bit string to byte array (this requires careful handling of bit packing)
-        // A simpler approach might be to hash a byte representation of the image data directly
-        // or hash a large block of the collected Von Neumann bits.
-        // For now, we'll leave this as a placeholder.
-        // Example (conceptual, needs proper bit-to-byte conversion):
-        // val bytes = convertBitsToBytes(bits)
-        // val digest = MessageDigest.getInstance("SHA-256")
-        // val hashBytes = digest.digest(bytes)
-        // return hashBytes.joinToString("") { "%02x".format(it) } // Return as hex string
-        return "Hashing not implemented yet" // Placeholder
+        // Convert the bit string to a byte array.
+        // This requires packing the bits into bytes (8 bits per byte).
+        // If the total number of bits is not a multiple of 8, the last byte will be padded with zeros.
+        val bytes = ByteArray((bits.length + 7) / 8) // Calculate number of bytes needed
+        for (i in bits.indices) {
+            if (bits[i] == '1') {
+                // Set the corresponding bit in the byte array
+                bytes[i / 8] = (bytes[i / 8].toInt() or (1 shl (7 - (i % 8)))).toByte()
+            }
+        }
+
+        // Apply SHA-256 hash
+        val digest = MessageDigest.getInstance("SHA-256")
+        val hashBytes = digest.digest(bytes)
+
+        // Convert the hash bytes to a hexadecimal string for display
+        return hashBytes.joinToString("") { "%02x".format(it) }
     }
-    */
 }
