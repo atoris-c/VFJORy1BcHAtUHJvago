@@ -11,7 +11,6 @@ import android.graphics.BitmapFactory
 import android.net.Uri // Import Uri
 import android.os.BatteryManager
 import android.os.Bundle
-import android.os.Environment
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -53,9 +52,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
-import java.io.File
-import java.io.FileOutputStream
-import java.io.OutputStream // Import OutputStream
 import java.nio.ByteBuffer
 import java.security.MessageDigest // Import for hashing
 import java.text.SimpleDateFormat
@@ -63,7 +59,6 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
-import kotlin.experimental.xor // Import for XOR operation
 
 // Import Material Icons
 import androidx.compose.material.icons.Icons
@@ -72,9 +67,6 @@ import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.ContentCopy // Icon for copy
 import androidx.compose.material.icons.filled.Save // Icon for save
 import androidx.compose.material.icons.filled.Info // Import Info icon
-import androidx.compose.ui.platform.Clipboard
-// No longer need LocalClipboard, using LocalClipboardManager
-// import androidx.compose.ui.platform.LocalClipboard
 import kotlin.coroutines.resumeWithException
 
 class MainActivity : ComponentActivity() {
