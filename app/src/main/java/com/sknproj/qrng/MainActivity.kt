@@ -359,7 +359,7 @@ class MainActivity : ComponentActivity() {
                                     )
                                 }
                                 Text(
-                                    text = if (isTemperatureHigh) "Temperature: High (${currentBatteryTemperature / 10.0}°C) - May increase noise" else "Temperature: Normal (${currentBatteryTemperature / 10.0}°C)",
+                                    text = if (isTemperatureHigh) "Temperature is high (${currentBatteryTemperature / 10.0}°C) - May increase noise" else "Temperature is normal (${currentBatteryTemperature / 10.0}°C)",
                                     color = if (isTemperatureHigh) Color.Yellow else Color.Green, // Use Yellow for warning
                                     style = MaterialTheme.typography.bodyMedium
                                 )
@@ -694,14 +694,14 @@ class MainActivity : ComponentActivity() {
                                 }
                                 // No need to request WRITE_EXTERNAL_STORAGE permission anymore
                             },
-                            title = { Text("App Permissions") }, // Updated title
+                            title = { Text("Welcome!") }, // Updated title
                             text = {
                                 // Display the current status for camera permission
                                 Column {
-                                    Text("Camera permission status: ${if (hasCameraPermission.value) "Granted" else "Denied"}")
+                                    Text("Camera permission is ${if (hasCameraPermission.value) "Granted" else "Denied"}")
                                     Spacer(modifier = Modifier.height(8.dp))
-                                    Text("Camera permission is required to use the TRNG feature.")
-                                    Text("Saving test data in Advanced Mode will open a file picker to choose where to save.")
+                                    Text("This app is native to Android 13+ but should be fully functional for Android 10 and above.")
+                                    Text("For Android 9 and below, you may not be able to use the Advanced Mode.")
                                 }
                             },
                             confirmButton = {
@@ -722,7 +722,7 @@ class MainActivity : ComponentActivity() {
                     if (showAdvancedModeInfoDialog) {
                         AlertDialog(
                             onDismissRequest = { showAdvancedModeInfoDialog = false },
-                            title = { Text("Advanced Mode Explanation") },
+                            title = { Text("Introducing Advanced Mode") },
                             text = {
                                 Text(
                                     "Advanced Mode is for generating large amounts of raw random data (Von Neumann corrected bits) for statistical testing using external tools like NIST SP 800-22. \n\n" +
